@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -76,6 +77,14 @@ func (nst NullSQLiteTime) MarshalJSON() ([]byte, error) {
 		return []byte("null"), nil
 	}
 	return nst.Time.MarshalJSON()
+}
+
+// Value implements driver.Valuer for NullSQLiteTime
+func (nst NullSQLiteTime) Value() (driver.Value, error) {
+	if !nst.Valid {
+		return nil, nil
+	}
+	return nst.Time.Format("2006-01-02 15:04:05"), nil
 }
 
 
@@ -223,6 +232,29 @@ func (db *DB) migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_agent_events_timestamp ON agent_events(timestamp DESC);
 		CREATE INDEX IF NOT EXISTS idx_agent_events_agent_id ON agent_events(agent_id);
 		CREATE INDEX IF NOT EXISTS idx_agent_events_step_id ON agent_events(step_id);
+
+		CREATE TABLE IF NOT EXISTS failed_steps_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			original_step_id INTEGER NOT NULL,
+			project_id INTEGER NOT NULL,
+			step_num INTEGER NOT NULL,
+			branch TEXT NOT NULL,
+			scope TEXT NOT NULL,
+			worktree TEXT,
+			agent_id TEXT,
+			claimed_at TEXT,
+			started_at TEXT,
+			failed_at TEXT,
+			last_commit TEXT,
+			files_modified TEXT,
+			notes TEXT,
+			archived_at TEXT NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_failed_steps_history_original_step_id ON failed_steps_history(original_step_id);
+		CREATE INDEX IF NOT EXISTS idx_failed_steps_history_project_id ON failed_steps_history(project_id);
+		CREATE INDEX IF NOT EXISTS idx_failed_steps_history_archived_at ON failed_steps_history(archived_at DESC);
 
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version INTEGER PRIMARY KEY,
@@ -762,6 +794,91 @@ func (db *DB) RecoverStep(stepID int64) error {
 		INSERT INTO agent_events (agent_id, step_id, event_type)
 		VALUES ('system', ?, 'recovered')
 	`, stepID)
+	if err != nil {
+		return fmt.Errorf("record event: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+
+	return nil
+}
+
+// RecoverFailedStep archives a failed step to history and resets it to not_started
+func (db *DB) RecoverFailedStep(stepID int64) error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Get the failed step
+	var step Step
+	err = tx.QueryRow(`
+		SELECT id, project_id, step_num, branch, scope,
+		       worktree, agent_id, claimed_at, started_at,
+		       last_commit, files_modified, notes
+		FROM steps
+		WHERE id = ? AND status = 'failed'
+	`, stepID).Scan(
+		&step.ID, &step.ProjectID, &step.StepNum, &step.Branch, &step.Scope,
+		&step.Worktree, &step.AgentID, &step.ClaimedAt, &step.StartedAt,
+		&step.LastCommit, &step.FilesModified, &step.Notes,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("step not found or not in failed state")
+		}
+		return fmt.Errorf("get failed step: %w", err)
+	}
+
+	// Archive the failed step to history
+	_, err = tx.Exec(`
+		INSERT INTO failed_steps_history
+		(original_step_id, project_id, step_num, branch, scope,
+		 worktree, agent_id, claimed_at, started_at, failed_at,
+		 last_commit, files_modified, notes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?, ?)
+	`, step.ID, step.ProjectID, step.StepNum, step.Branch, step.Scope,
+		step.Worktree, step.AgentID, step.ClaimedAt, step.StartedAt,
+		step.LastCommit, step.FilesModified, step.Notes)
+	if err != nil {
+		return fmt.Errorf("archive failed step: %w", err)
+	}
+
+	// Reset the step to not_started
+	result, err := tx.Exec(`
+		UPDATE steps
+		SET status = 'not_started',
+		    agent_id = NULL,
+		    claimed_at = NULL,
+		    started_at = NULL,
+		    completed_at = NULL,
+		    last_heartbeat = NULL,
+		    last_commit = NULL,
+		    files_modified = NULL,
+		    worktree = NULL,
+		    notes = NULL
+		WHERE id = ?
+	`, stepID)
+	if err != nil {
+		return fmt.Errorf("reset step: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check rows: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("step update failed")
+	}
+
+	// Record recovery event
+	_, err = tx.Exec(`
+		INSERT INTO agent_events (agent_id, project_id, step_id, event_type, metadata)
+		VALUES ('system', ?, ?, 'recovered', '{"from_status":"failed"}')
+	`, step.ProjectID, stepID)
 	if err != nil {
 		return fmt.Errorf("record event: %w", err)
 	}

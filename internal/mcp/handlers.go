@@ -346,6 +346,20 @@ func (h *Handlers) RecoverStep(arguments map[string]interface{}) (*mcp.CallToolR
 	return mcp.NewToolResultText("{\"ok\":true}"), nil
 }
 
+// RecoverFailedStep handles recover_failed_step tool
+func (h *Handlers) RecoverFailedStep(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+	stepID, ok := arguments["step_id"].(float64)
+	if !ok {
+		return mcp.NewToolResultError("step_id must be a number"), nil
+	}
+
+	if err := h.db.RecoverFailedStep(int64(stepID)); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("recover failed step: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText("{\"ok\":true}"), nil
+}
+
 // GetMetrics handles get_metrics tool
 func (h *Handlers) GetMetrics(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
 	var projectName *string

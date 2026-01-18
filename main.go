@@ -177,6 +177,13 @@ func registerTools(s *server.MCPServer, handlers *mcphandlers.Handlers) {
 			mcp.Description("Step ID")),
 	), handlers.RecoverStep)
 
+	s.AddTool(mcp.NewTool("recover_failed_step",
+		mcp.WithDescription("Recover a failed step by archiving it to history and resetting to not_started"),
+		mcp.WithNumber("step_id",
+			mcp.Required(),
+			mcp.Description("Step ID")),
+	), handlers.RecoverFailedStep)
+
 	// Analytics
 	s.AddTool(mcp.NewTool("get_metrics",
 		mcp.WithDescription("Get project and agent metrics"),
