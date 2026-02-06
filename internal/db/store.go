@@ -64,8 +64,12 @@ func NewDB(path string) (*DB, error) {
 	return db, nil
 }
 
-// Close closes the database connection
+// Close checkpoints the WAL and closes the database connection
 func (db *DB) Close() error {
+	// Checkpoint WAL to main database file before closing.
+	// If checkpoint fails, proceed with close anyway — WAL is crash-safe
+	// and will be recovered on next open.
+	db.conn.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 	return db.conn.Close()
 }
 
@@ -232,8 +236,84 @@ type StepInput struct {
 	DependsOn []int  `json:"depends_on"`
 }
 
+// detectCycle checks for cycles in the dependency graph using DFS
+func detectCycle(steps []StepInput) error {
+	// Build adjacency list: step_num -> depends_on step_nums
+	adj := make(map[int][]int)
+	valid := make(map[int]bool)
+	for _, s := range steps {
+		valid[s.StepNum] = true
+		adj[s.StepNum] = s.DependsOn
+	}
+
+	// Validate dependency targets exist
+	for _, s := range steps {
+		for _, dep := range s.DependsOn {
+			if !valid[dep] {
+				return fmt.Errorf("step %d depends on non-existent step %d", s.StepNum, dep)
+			}
+		}
+	}
+
+	// DFS cycle detection
+	const (
+		white = 0 // unvisited
+		gray  = 1 // in current path
+		black = 2 // fully processed
+	)
+	color := make(map[int]int)
+
+	var visit func(node int) error
+	visit = func(node int) error {
+		color[node] = gray
+		for _, dep := range adj[node] {
+			if color[dep] == gray {
+				return fmt.Errorf("dependency cycle detected involving step %d", dep)
+			}
+			if color[dep] == white {
+				if err := visit(dep); err != nil {
+					return err
+				}
+			}
+		}
+		color[node] = black
+		return nil
+	}
+
+	for _, s := range steps {
+		if color[s.StepNum] == white {
+			if err := visit(s.StepNum); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // CreateProject creates a new project with steps
 func (db *DB) CreateProject(ctx context.Context, name, baseCommit string, steps []StepInput) (*Project, error) {
+	if name == "" {
+		return nil, fmt.Errorf("project name is required")
+	}
+	if len(steps) == 0 {
+		return nil, fmt.Errorf("at least one step is required")
+	}
+	for _, s := range steps {
+		if s.StepNum <= 0 {
+			return nil, fmt.Errorf("step_num must be positive, got %d", s.StepNum)
+		}
+		if s.Branch == "" {
+			return nil, fmt.Errorf("branch is required for step %d", s.StepNum)
+		}
+		if s.Scope == "" {
+			return nil, fmt.Errorf("scope is required for step %d", s.StepNum)
+		}
+	}
+
+	if err := detectCycle(steps); err != nil {
+		return nil, err
+	}
+
 	tx, err := db.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin transaction: %w", err)
@@ -363,7 +443,15 @@ func (db *DB) ClaimStep(ctx context.Context, projectName, agentID string) (*Step
 
 // Heartbeat updates step heartbeat
 func (db *DB) Heartbeat(ctx context.Context, stepID StepID, agentID string) error {
-	result, err := db.queries.UpdateHeartbeat(ctx, UpdateHeartbeatParams{
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	qtx := db.queries.WithTx(tx)
+
+	result, err := qtx.UpdateHeartbeat(ctx, UpdateHeartbeatParams{
 		ID:      stepID,
 		AgentID: sql.NullString{String: agentID, Valid: true},
 	})
@@ -379,12 +467,17 @@ func (db *DB) Heartbeat(ctx context.Context, stepID StepID, agentID string) erro
 		return fmt.Errorf("step not found or not owned by agent")
 	}
 
-	if evtErr := db.queries.InsertAgentEvent(ctx, InsertAgentEventParams{
+	err = qtx.InsertAgentEvent(ctx, InsertAgentEventParams{
 		AgentID:   agentID,
 		StepID:    NullStepID{StepID: stepID, Valid: true},
 		EventType: EventTypeHeartbeat,
-	}); evtErr != nil {
-		return fmt.Errorf("heartbeat succeeded but event insert failed: %w", evtErr)
+	})
+	if err != nil {
+		return fmt.Errorf("record event: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
 	}
 
 	return nil
@@ -737,20 +830,27 @@ func (db *DB) RecoverFailedStep(ctx context.Context, stepID StepID) error {
 	return nil
 }
 
+// RecoveryResult holds the outcome of an auto-recovery attempt
+type RecoveryResult struct {
+	Recovered []StepID `json:"recovered"`
+	Failed    []StepID `json:"failed"`
+}
+
 // AutoRecover detects stale work and recovers it automatically
-func (db *DB) AutoRecover(ctx context.Context, timeoutMinutes int) (int, error) {
+func (db *DB) AutoRecover(ctx context.Context, timeoutMinutes int) (*RecoveryResult, error) {
 	stale, err := db.DetectStaleWork(ctx, timeoutMinutes)
 	if err != nil {
-		return 0, fmt.Errorf("detect stale work: %w", err)
+		return nil, fmt.Errorf("detect stale work: %w", err)
 	}
-	recovered := 0
+	result := &RecoveryResult{}
 	for _, step := range stale {
 		if err := db.RecoverStep(ctx, step.ID); err != nil {
-			continue // Step may have been recovered by another path
+			result.Failed = append(result.Failed, step.ID)
+			continue
 		}
-		recovered++
+		result.Recovered = append(result.Recovered, step.ID)
 	}
-	return recovered, nil
+	return result, nil
 }
 
 // Metrics holds metrics data

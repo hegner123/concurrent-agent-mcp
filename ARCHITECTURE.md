@@ -185,9 +185,9 @@ Agent working → heartbeat() every 30-60s
 - Prevents immediate failure on contention
 
 **Connection pool:**
-- Max 25 open connections
-- Handles multiple agent requests concurrently
-- Each request gets own connection from pool
+- Max 1 open connection (required for pragma safety with modernc.org/sqlite)
+- Pragmas are per-connection; single connection ensures all queries use configured pragmas
+- Write serialization is inherent to SQLite WAL mode regardless of pool size
 
 ## State Machine
 

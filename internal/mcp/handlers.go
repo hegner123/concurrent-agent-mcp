@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hegner123/hq/internal/db"
 	"github.com/mark3labs/mcp-go/mcp"
 )
+
+const handlerTimeout = 30 * time.Second
 
 // parseInt extracts an int from arguments by key, handling int, float64, and string formats
 func parseInt(arguments map[string]any, key string) (int, bool) {
@@ -70,9 +73,15 @@ func NewHandlers(database *db.DB) *Handlers {
 	return &Handlers{db: database}
 }
 
+// newContext creates a context with the standard handler timeout
+func newContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), handlerTimeout)
+}
+
 // CreateProject handles create_project tool
 func (h *Handlers) CreateProject(arguments map[string]any) (*mcp.CallToolResult, error) {
-	ctx := context.Background()
+	ctx, cancel := newContext()
+	defer cancel()
 
 	name, ok := parseString(arguments, "name")
 	if !ok {
@@ -155,7 +164,8 @@ func (h *Handlers) CreateProject(arguments map[string]any) (*mcp.CallToolResult,
 
 // GetProject handles get_project tool
 func (h *Handlers) GetProject(arguments map[string]any) (*mcp.CallToolResult, error) {
-	ctx := context.Background()
+	ctx, cancel := newContext()
+	defer cancel()
 
 	name, ok := parseString(arguments, "name")
 	if !ok {
@@ -177,7 +187,8 @@ func (h *Handlers) GetProject(arguments map[string]any) (*mcp.CallToolResult, er
 
 // ListProjects handles list_projects tool
 func (h *Handlers) ListProjects(arguments map[string]any) (*mcp.CallToolResult, error) {
-	ctx := context.Background()
+	ctx, cancel := newContext()
+	defer cancel()
 
 	var status *string
 	if statusArg, ok := parseString(arguments, "status"); ok {
@@ -199,7 +210,8 @@ func (h *Handlers) ListProjects(arguments map[string]any) (*mcp.CallToolResult, 
 
 // ClaimStep handles claim_step tool
 func (h *Handlers) ClaimStep(arguments map[string]any) (*mcp.CallToolResult, error) {
-	ctx := context.Background()
+	ctx, cancel := newContext()
+	defer cancel()
 
 	project, ok := parseString(arguments, "project")
 	if !ok {
@@ -230,7 +242,8 @@ func (h *Handlers) ClaimStep(arguments map[string]any) (*mcp.CallToolResult, err
 
 // StartStep handles start_step tool
 func (h *Handlers) StartStep(arguments map[string]any) (*mcp.CallToolResult, error) {
-	ctx := context.Background()
+	ctx, cancel := newContext()
+	defer cancel()
 
 	stepID, ok := parseStepID(arguments)
 	if !ok {
@@ -251,7 +264,8 @@ func (h *Handlers) StartStep(arguments map[string]any) (*mcp.CallToolResult, err
 
 // Heartbeat handles heartbeat tool
 func (h *Handlers) Heartbeat(arguments map[string]any) (*mcp.CallToolResult, error) {
-	ctx := context.Background()
+	ctx, cancel := newContext()
+	defer cancel()
 
 	stepID, ok := parseStepID(arguments)
 	if !ok {
@@ -272,7 +286,8 @@ func (h *Handlers) Heartbeat(arguments map[string]any) (*mcp.CallToolResult, err
 
 // CompleteStep handles complete_step tool
 func (h *Handlers) CompleteStep(arguments map[string]any) (*mcp.CallToolResult, error) {
-	ctx := context.Background()
+	ctx, cancel := newContext()
+	defer cancel()
 
 	stepID, ok := parseStepID(arguments)
 	if !ok {
@@ -316,7 +331,8 @@ func (h *Handlers) CompleteStep(arguments map[string]any) (*mcp.CallToolResult, 
 
 // FailStep handles fail_step tool
 func (h *Handlers) FailStep(arguments map[string]any) (*mcp.CallToolResult, error) {
-	ctx := context.Background()
+	ctx, cancel := newContext()
+	defer cancel()
 
 	stepID, ok := parseStepID(arguments)
 	if !ok {
@@ -337,7 +353,8 @@ func (h *Handlers) FailStep(arguments map[string]any) (*mcp.CallToolResult, erro
 
 // GetStep handles get_step tool
 func (h *Handlers) GetStep(arguments map[string]any) (*mcp.CallToolResult, error) {
-	ctx := context.Background()
+	ctx, cancel := newContext()
+	defer cancel()
 
 	stepID, ok := parseStepID(arguments)
 	if !ok {
@@ -359,7 +376,8 @@ func (h *Handlers) GetStep(arguments map[string]any) (*mcp.CallToolResult, error
 
 // GetAvailableSteps handles get_available_steps tool
 func (h *Handlers) GetAvailableSteps(arguments map[string]any) (*mcp.CallToolResult, error) {
-	ctx := context.Background()
+	ctx, cancel := newContext()
+	defer cancel()
 
 	var projectName *string
 	if projectArg, ok := parseString(arguments, "project"); ok {
@@ -386,7 +404,8 @@ func (h *Handlers) GetAvailableSteps(arguments map[string]any) (*mcp.CallToolRes
 
 // DetectStaleWork handles detect_stale_work tool
 func (h *Handlers) DetectStaleWork(arguments map[string]any) (*mcp.CallToolResult, error) {
-	ctx := context.Background()
+	ctx, cancel := newContext()
+	defer cancel()
 
 	timeoutMinutes := 15
 	if v, ok := parseInt(arguments, "timeout_minutes"); ok {
@@ -408,7 +427,8 @@ func (h *Handlers) DetectStaleWork(arguments map[string]any) (*mcp.CallToolResul
 
 // RecoverStep handles recover_step tool
 func (h *Handlers) RecoverStep(arguments map[string]any) (*mcp.CallToolResult, error) {
-	ctx := context.Background()
+	ctx, cancel := newContext()
+	defer cancel()
 
 	stepID, ok := parseStepID(arguments)
 	if !ok {
@@ -424,7 +444,8 @@ func (h *Handlers) RecoverStep(arguments map[string]any) (*mcp.CallToolResult, e
 
 // RecoverFailedStep handles recover_failed_step tool
 func (h *Handlers) RecoverFailedStep(arguments map[string]any) (*mcp.CallToolResult, error) {
-	ctx := context.Background()
+	ctx, cancel := newContext()
+	defer cancel()
 
 	stepID, ok := parseStepID(arguments)
 	if !ok {
@@ -440,7 +461,8 @@ func (h *Handlers) RecoverFailedStep(arguments map[string]any) (*mcp.CallToolRes
 
 // GetMetrics handles get_metrics tool
 func (h *Handlers) GetMetrics(arguments map[string]any) (*mcp.CallToolResult, error) {
-	ctx := context.Background()
+	ctx, cancel := newContext()
+	defer cancel()
 
 	var projectName *string
 	if projectArg, ok := parseString(arguments, "project"); ok {
@@ -467,7 +489,8 @@ func (h *Handlers) GetMetrics(arguments map[string]any) (*mcp.CallToolResult, er
 
 // GetAgentEvents handles get_agent_events tool
 func (h *Handlers) GetAgentEvents(arguments map[string]any) (*mcp.CallToolResult, error) {
-	ctx := context.Background()
+	ctx, cancel := newContext()
+	defer cancel()
 
 	var agentID *string
 	if agentArg, ok := parseString(arguments, "agent_id"); ok {

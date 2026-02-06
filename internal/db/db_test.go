@@ -164,6 +164,82 @@ func TestCreateProject(t *testing.T) {
 	}
 }
 
+func TestCreateProject_Validation(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	t.Run("empty name", func(t *testing.T) {
+		_, err := db.CreateProject(ctx, "", "abc", []StepInput{{StepNum: 1, Branch: "b", Scope: "s"}})
+		if err == nil {
+			t.Fatal("expected error for empty name")
+		}
+	})
+
+	t.Run("no steps", func(t *testing.T) {
+		_, err := db.CreateProject(ctx, "p", "abc", nil)
+		if err == nil {
+			t.Fatal("expected error for no steps")
+		}
+	})
+
+	t.Run("invalid step_num", func(t *testing.T) {
+		_, err := db.CreateProject(ctx, "p", "abc", []StepInput{{StepNum: 0, Branch: "b", Scope: "s"}})
+		if err == nil {
+			t.Fatal("expected error for step_num <= 0")
+		}
+	})
+
+	t.Run("empty branch", func(t *testing.T) {
+		_, err := db.CreateProject(ctx, "p", "abc", []StepInput{{StepNum: 1, Branch: "", Scope: "s"}})
+		if err == nil {
+			t.Fatal("expected error for empty branch")
+		}
+	})
+
+	t.Run("empty scope", func(t *testing.T) {
+		_, err := db.CreateProject(ctx, "p", "abc", []StepInput{{StepNum: 1, Branch: "b", Scope: ""}})
+		if err == nil {
+			t.Fatal("expected error for empty scope")
+		}
+	})
+}
+
+func TestCreateProject_CyclicDependency(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	t.Run("direct cycle", func(t *testing.T) {
+		steps := []StepInput{
+			{StepNum: 1, Branch: "b1", Scope: "s", DependsOn: []int{2}},
+			{StepNum: 2, Branch: "b2", Scope: "s", DependsOn: []int{1}},
+		}
+		_, err := db.CreateProject(ctx, "cycle-test", "abc", steps)
+		if err == nil {
+			t.Fatal("expected error for cyclic dependency")
+		}
+	})
+
+	t.Run("self cycle", func(t *testing.T) {
+		steps := []StepInput{
+			{StepNum: 1, Branch: "b1", Scope: "s", DependsOn: []int{1}},
+		}
+		_, err := db.CreateProject(ctx, "self-cycle", "abc", steps)
+		if err == nil {
+			t.Fatal("expected error for self-referencing dependency")
+		}
+	})
+
+	t.Run("non-existent dependency", func(t *testing.T) {
+		steps := []StepInput{
+			{StepNum: 1, Branch: "b1", Scope: "s", DependsOn: []int{99}},
+		}
+		_, err := db.CreateProject(ctx, "missing-dep", "abc", steps)
+		if err == nil {
+			t.Fatal("expected error for non-existent dependency target")
+		}
+	})
+}
+
 func TestCreateProject_DuplicateName(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()

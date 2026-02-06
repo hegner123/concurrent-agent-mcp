@@ -19,27 +19,27 @@ This is a Go-based MCP (Model Context Protocol) server for coordinating multiple
 
 ```bash
 # Build binary
-make build              # Builds to bin/hq
+just build              # Builds to bin/hq
 
 # Install system-wide
-make install            # Installs to /usr/local/bin/hq
+just install            # Installs to /usr/local/bin/hq
 
 # Run tests
-make test
+just test
 
 # Run in development mode (with logging)
-make dev
+just dev
 
 # Format code
-make fmt
+just fmt
 
 # Clean build artifacts and database
-make clean              # Removes bin/ and database files
+just clean              # Removes bin/ and database files
 
 # Database management
-make db-shell           # Opens sqlite3 shell
-make db-reset           # Deletes database (recreated on next run)
-make db-backup          # Creates timestamped backup
+just db-shell           # Opens sqlite3 shell
+just db-reset           # Deletes database (recreated on next run)
+just db-backup          # Creates timestamped backup
 ```
 
 ## Code Architecture
@@ -108,7 +108,7 @@ not_started → claim_step() → claimed → start_step() → in_progress
 ## Testing Patterns
 
 **Testing the server locally:**
-1. Run `make build` to create binary
+1. Run `just build` to create binary
 2. Execute `./bin/hq` directly (connects stdin/stdout)
 3. The server will create the database and run migrations
 4. Use Claude Code or any MCP client to test tools

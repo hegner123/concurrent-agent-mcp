@@ -7,7 +7,10 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -34,6 +37,16 @@ func main() {
 func run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Signal handling: first signal cancels context, second exits immediately
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		cancel()
+		<-sigCh
+		os.Exit(1)
+	}()
 
 	// Get database path from env or use default
 	dbPath := os.Getenv("AGENT_DB_PATH")
@@ -70,7 +83,10 @@ func run() error {
 	registerTools(s, handlers)
 
 	// Background stale-work recovery
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -87,6 +103,10 @@ func run() error {
 	if err := server.ServeStdio(s); err != nil {
 		return fmt.Errorf("serve: %w", err)
 	}
+
+	// After ServeStdio returns, cancel context and wait for background goroutine
+	cancel()
+	wg.Wait()
 
 	return nil
 }
