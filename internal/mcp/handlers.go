@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -71,6 +72,8 @@ func NewHandlers(database *db.DB) *Handlers {
 
 // CreateProject handles create_project tool
 func (h *Handlers) CreateProject(arguments map[string]any) (*mcp.CallToolResult, error) {
+	ctx := context.Background()
+
 	name, ok := parseString(arguments, "name")
 	if !ok {
 		return mcp.NewToolResultError("name is required"), nil
@@ -137,7 +140,7 @@ func (h *Handlers) CreateProject(arguments map[string]any) (*mcp.CallToolResult,
 		})
 	}
 
-	project, err := h.db.CreateProject(name, baseCommit, steps)
+	project, err := h.db.CreateProject(ctx, name, baseCommit, steps)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("create project: %v", err)), nil
 	}
@@ -152,12 +155,14 @@ func (h *Handlers) CreateProject(arguments map[string]any) (*mcp.CallToolResult,
 
 // GetProject handles get_project tool
 func (h *Handlers) GetProject(arguments map[string]any) (*mcp.CallToolResult, error) {
+	ctx := context.Background()
+
 	name, ok := parseString(arguments, "name")
 	if !ok {
 		return mcp.NewToolResultError("name is required"), nil
 	}
 
-	project, err := h.db.GetProject(name)
+	project, err := h.db.GetProject(ctx, name)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("get project: %v", err)), nil
 	}
@@ -172,12 +177,14 @@ func (h *Handlers) GetProject(arguments map[string]any) (*mcp.CallToolResult, er
 
 // ListProjects handles list_projects tool
 func (h *Handlers) ListProjects(arguments map[string]any) (*mcp.CallToolResult, error) {
+	ctx := context.Background()
+
 	var status *string
 	if statusArg, ok := parseString(arguments, "status"); ok {
 		status = &statusArg
 	}
 
-	projects, err := h.db.ListProjects(status)
+	projects, err := h.db.ListProjects(ctx, status)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("list projects: %v", err)), nil
 	}
@@ -192,6 +199,8 @@ func (h *Handlers) ListProjects(arguments map[string]any) (*mcp.CallToolResult, 
 
 // ClaimStep handles claim_step tool
 func (h *Handlers) ClaimStep(arguments map[string]any) (*mcp.CallToolResult, error) {
+	ctx := context.Background()
+
 	project, ok := parseString(arguments, "project")
 	if !ok {
 		return mcp.NewToolResultError("project is required"), nil
@@ -202,7 +211,7 @@ func (h *Handlers) ClaimStep(arguments map[string]any) (*mcp.CallToolResult, err
 		return mcp.NewToolResultError("agent_id is required"), nil
 	}
 
-	step, err := h.db.ClaimStep(project, agentID)
+	step, err := h.db.ClaimStep(ctx, project, agentID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("claim step: %v", err)), nil
 	}
@@ -221,6 +230,8 @@ func (h *Handlers) ClaimStep(arguments map[string]any) (*mcp.CallToolResult, err
 
 // StartStep handles start_step tool
 func (h *Handlers) StartStep(arguments map[string]any) (*mcp.CallToolResult, error) {
+	ctx := context.Background()
+
 	stepID, ok := parseStepID(arguments)
 	if !ok {
 		return mcp.NewToolResultError("step_id is required"), nil
@@ -231,7 +242,7 @@ func (h *Handlers) StartStep(arguments map[string]any) (*mcp.CallToolResult, err
 		worktree = &worktreeArg
 	}
 
-	if err := h.db.StartStep(db.StepID(stepID), worktree); err != nil {
+	if err := h.db.StartStep(ctx, db.StepID(stepID), worktree); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("start step: %v", err)), nil
 	}
 
@@ -240,6 +251,8 @@ func (h *Handlers) StartStep(arguments map[string]any) (*mcp.CallToolResult, err
 
 // Heartbeat handles heartbeat tool
 func (h *Handlers) Heartbeat(arguments map[string]any) (*mcp.CallToolResult, error) {
+	ctx := context.Background()
+
 	stepID, ok := parseStepID(arguments)
 	if !ok {
 		return mcp.NewToolResultError("step_id is required"), nil
@@ -250,7 +263,7 @@ func (h *Handlers) Heartbeat(arguments map[string]any) (*mcp.CallToolResult, err
 		return mcp.NewToolResultError("agent_id is required"), nil
 	}
 
-	if err := h.db.Heartbeat(db.StepID(stepID), agentID); err != nil {
+	if err := h.db.Heartbeat(ctx, db.StepID(stepID), agentID); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("heartbeat: %v", err)), nil
 	}
 
@@ -259,6 +272,8 @@ func (h *Handlers) Heartbeat(arguments map[string]any) (*mcp.CallToolResult, err
 
 // CompleteStep handles complete_step tool
 func (h *Handlers) CompleteStep(arguments map[string]any) (*mcp.CallToolResult, error) {
+	ctx := context.Background()
+
 	stepID, ok := parseStepID(arguments)
 	if !ok {
 		return mcp.NewToolResultError("step_id is required"), nil
@@ -292,7 +307,7 @@ func (h *Handlers) CompleteStep(arguments map[string]any) (*mcp.CallToolResult, 
 		notes = &notesArg
 	}
 
-	if err := h.db.CompleteStep(db.StepID(stepID), commitHash, filesModified, notes); err != nil {
+	if err := h.db.CompleteStep(ctx, db.StepID(stepID), commitHash, filesModified, notes); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("complete step: %v", err)), nil
 	}
 
@@ -301,6 +316,8 @@ func (h *Handlers) CompleteStep(arguments map[string]any) (*mcp.CallToolResult, 
 
 // FailStep handles fail_step tool
 func (h *Handlers) FailStep(arguments map[string]any) (*mcp.CallToolResult, error) {
+	ctx := context.Background()
+
 	stepID, ok := parseStepID(arguments)
 	if !ok {
 		return mcp.NewToolResultError("step_id is required"), nil
@@ -311,7 +328,7 @@ func (h *Handlers) FailStep(arguments map[string]any) (*mcp.CallToolResult, erro
 		return mcp.NewToolResultError("reason is required"), nil
 	}
 
-	if err := h.db.FailStep(db.StepID(stepID), reason); err != nil {
+	if err := h.db.FailStep(ctx, db.StepID(stepID), reason); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("fail step: %v", err)), nil
 	}
 
@@ -320,12 +337,14 @@ func (h *Handlers) FailStep(arguments map[string]any) (*mcp.CallToolResult, erro
 
 // GetStep handles get_step tool
 func (h *Handlers) GetStep(arguments map[string]any) (*mcp.CallToolResult, error) {
+	ctx := context.Background()
+
 	stepID, ok := parseStepID(arguments)
 	if !ok {
 		return mcp.NewToolResultError("step_id is required"), nil
 	}
 
-	step, err := h.db.GetStep(db.StepID(stepID))
+	step, err := h.db.GetStep(ctx, db.StepID(stepID))
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("get step: %v", err)), nil
 	}
@@ -340,6 +359,8 @@ func (h *Handlers) GetStep(arguments map[string]any) (*mcp.CallToolResult, error
 
 // GetAvailableSteps handles get_available_steps tool
 func (h *Handlers) GetAvailableSteps(arguments map[string]any) (*mcp.CallToolResult, error) {
+	ctx := context.Background()
+
 	var projectName *string
 	if projectArg, ok := parseString(arguments, "project"); ok {
 		projectName = &projectArg
@@ -350,7 +371,7 @@ func (h *Handlers) GetAvailableSteps(arguments map[string]any) (*mcp.CallToolRes
 		scope = &scopeArg
 	}
 
-	steps, err := h.db.GetAvailableSteps(projectName, scope)
+	steps, err := h.db.GetAvailableSteps(ctx, projectName, scope)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("get available steps: %v", err)), nil
 	}
@@ -365,12 +386,14 @@ func (h *Handlers) GetAvailableSteps(arguments map[string]any) (*mcp.CallToolRes
 
 // DetectStaleWork handles detect_stale_work tool
 func (h *Handlers) DetectStaleWork(arguments map[string]any) (*mcp.CallToolResult, error) {
+	ctx := context.Background()
+
 	timeoutMinutes := 15
 	if v, ok := parseInt(arguments, "timeout_minutes"); ok {
 		timeoutMinutes = v
 	}
 
-	steps, err := h.db.DetectStaleWork(timeoutMinutes)
+	steps, err := h.db.DetectStaleWork(ctx, timeoutMinutes)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("detect stale work: %v", err)), nil
 	}
@@ -385,12 +408,14 @@ func (h *Handlers) DetectStaleWork(arguments map[string]any) (*mcp.CallToolResul
 
 // RecoverStep handles recover_step tool
 func (h *Handlers) RecoverStep(arguments map[string]any) (*mcp.CallToolResult, error) {
+	ctx := context.Background()
+
 	stepID, ok := parseStepID(arguments)
 	if !ok {
 		return mcp.NewToolResultError("step_id is required"), nil
 	}
 
-	if err := h.db.RecoverStep(db.StepID(stepID)); err != nil {
+	if err := h.db.RecoverStep(ctx, db.StepID(stepID)); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("recover step: %v", err)), nil
 	}
 
@@ -399,12 +424,14 @@ func (h *Handlers) RecoverStep(arguments map[string]any) (*mcp.CallToolResult, e
 
 // RecoverFailedStep handles recover_failed_step tool
 func (h *Handlers) RecoverFailedStep(arguments map[string]any) (*mcp.CallToolResult, error) {
+	ctx := context.Background()
+
 	stepID, ok := parseStepID(arguments)
 	if !ok {
 		return mcp.NewToolResultError("step_id is required"), nil
 	}
 
-	if err := h.db.RecoverFailedStep(db.StepID(stepID)); err != nil {
+	if err := h.db.RecoverFailedStep(ctx, db.StepID(stepID)); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("recover failed step: %v", err)), nil
 	}
 
@@ -413,6 +440,8 @@ func (h *Handlers) RecoverFailedStep(arguments map[string]any) (*mcp.CallToolRes
 
 // GetMetrics handles get_metrics tool
 func (h *Handlers) GetMetrics(arguments map[string]any) (*mcp.CallToolResult, error) {
+	ctx := context.Background()
+
 	var projectName *string
 	if projectArg, ok := parseString(arguments, "project"); ok {
 		projectName = &projectArg
@@ -423,7 +452,7 @@ func (h *Handlers) GetMetrics(arguments map[string]any) (*mcp.CallToolResult, er
 		agentID = &agentArg
 	}
 
-	metrics, err := h.db.GetMetrics(projectName, agentID)
+	metrics, err := h.db.GetMetrics(ctx, projectName, agentID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("get metrics: %v", err)), nil
 	}
@@ -438,6 +467,8 @@ func (h *Handlers) GetMetrics(arguments map[string]any) (*mcp.CallToolResult, er
 
 // GetAgentEvents handles get_agent_events tool
 func (h *Handlers) GetAgentEvents(arguments map[string]any) (*mcp.CallToolResult, error) {
+	ctx := context.Background()
+
 	var agentID *string
 	if agentArg, ok := parseString(arguments, "agent_id"); ok {
 		agentID = &agentArg
@@ -453,7 +484,7 @@ func (h *Handlers) GetAgentEvents(arguments map[string]any) (*mcp.CallToolResult
 		limit = v
 	}
 
-	events, err := h.db.GetAgentEvents(agentID, projectName, limit)
+	events, err := h.db.GetAgentEvents(ctx, agentID, projectName, limit)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("get agent events: %v", err)), nil
 	}

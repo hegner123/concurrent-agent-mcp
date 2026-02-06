@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS steps (
     UNIQUE(project_id, step_num)
 );
 
-CREATE INDEX IF NOT EXISTS idx_steps_project_id ON steps(project_id);
+CREATE INDEX IF NOT EXISTS idx_steps_project_status_stepnum ON steps(project_id, status, step_num);
 CREATE INDEX IF NOT EXISTS idx_steps_status ON steps(status);
 CREATE INDEX IF NOT EXISTS idx_steps_agent_id ON steps(agent_id);
 CREATE INDEX IF NOT EXISTS idx_steps_scope ON steps(scope);

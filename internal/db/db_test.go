@@ -1,7 +1,9 @@
 package db
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -139,13 +141,14 @@ func TestNullSQLiteTime_Value(t *testing.T) {
 
 func TestCreateProject(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	steps := []StepInput{
 		{StepNum: 1, Branch: "feature/auth", Scope: "backend"},
 		{StepNum: 2, Branch: "feature/auth-ui", Scope: "frontend", DependsOn: []int{1}},
 	}
 
-	project, err := db.CreateProject("test-project", "abc123", steps)
+	project, err := db.CreateProject(ctx, "test-project", "abc123", steps)
 	if err != nil {
 		t.Fatalf("CreateProject failed: %v", err)
 	}
@@ -163,15 +166,16 @@ func TestCreateProject(t *testing.T) {
 
 func TestCreateProject_DuplicateName(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	steps := []StepInput{{StepNum: 1, Branch: "b", Scope: "s"}}
 
-	_, err := db.CreateProject("dup-project", "abc", steps)
+	_, err := db.CreateProject(ctx, "dup-project", "abc", steps)
 	if err != nil {
 		t.Fatalf("first CreateProject failed: %v", err)
 	}
 
-	_, err = db.CreateProject("dup-project", "def", steps)
+	_, err = db.CreateProject(ctx, "dup-project", "def", steps)
 	if err == nil {
 		t.Fatal("expected error for duplicate project name")
 	}
@@ -179,26 +183,30 @@ func TestCreateProject_DuplicateName(t *testing.T) {
 
 func TestGetProject(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	t.Run("existing project", func(t *testing.T) {
 		steps := []StepInput{{StepNum: 1, Branch: "b", Scope: "s"}}
-		_, err := db.CreateProject("get-test", "abc", steps)
+		_, err := db.CreateProject(ctx, "get-test", "abc", steps)
 		if err != nil {
 			t.Fatalf("CreateProject failed: %v", err)
 		}
 
-		project, err := db.GetProject("get-test")
+		result, err := db.GetProject(ctx, "get-test")
 		if err != nil {
 			t.Fatalf("GetProject failed: %v", err)
 		}
-		if project.Name != "get-test" {
-			t.Errorf("expected name 'get-test', got %q", project.Name)
+		if result.Project.Name != "get-test" {
+			t.Errorf("expected name 'get-test', got %q", result.Project.Name)
+		}
+		if len(result.Steps) != 1 {
+			t.Errorf("expected 1 step, got %d", len(result.Steps))
 		}
 	})
 
 	t.Run("non-existing project", func(t *testing.T) {
-		_, err := db.GetProject("non-existent")
-		if err != sql.ErrNoRows {
+		_, err := db.GetProject(ctx, "non-existent")
+		if !errors.Is(err, sql.ErrNoRows) {
 			t.Errorf("expected sql.ErrNoRows, got %v", err)
 		}
 	})
@@ -206,20 +214,21 @@ func TestGetProject(t *testing.T) {
 
 func TestListProjects(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	steps := []StepInput{{StepNum: 1, Branch: "b", Scope: "s"}}
 
-	_, err := db.CreateProject("list-1", "abc", steps)
+	_, err := db.CreateProject(ctx, "list-1", "abc", steps)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = db.CreateProject("list-2", "def", steps)
+	_, err = db.CreateProject(ctx, "list-2", "def", steps)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	t.Run("no filter", func(t *testing.T) {
-		projects, err := db.ListProjects(nil)
+		projects, err := db.ListProjects(ctx, nil)
 		if err != nil {
 			t.Fatalf("ListProjects failed: %v", err)
 		}
@@ -230,7 +239,7 @@ func TestListProjects(t *testing.T) {
 
 	t.Run("with status filter", func(t *testing.T) {
 		status := "active"
-		projects, err := db.ListProjects(&status)
+		projects, err := db.ListProjects(ctx, &status)
 		if err != nil {
 			t.Fatalf("ListProjects failed: %v", err)
 		}
@@ -239,12 +248,20 @@ func TestListProjects(t *testing.T) {
 		}
 
 		status = "completed"
-		projects, err = db.ListProjects(&status)
+		projects, err = db.ListProjects(ctx, &status)
 		if err != nil {
 			t.Fatalf("ListProjects failed: %v", err)
 		}
 		if len(projects) != 0 {
 			t.Errorf("expected 0 completed projects, got %d", len(projects))
+		}
+	})
+
+	t.Run("invalid status filter", func(t *testing.T) {
+		status := "invalid_status"
+		_, err := db.ListProjects(ctx, &status)
+		if err == nil {
+			t.Fatal("expected error for invalid status filter")
 		}
 	})
 }
@@ -253,17 +270,18 @@ func TestListProjects(t *testing.T) {
 
 func TestClaimStep(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	steps := []StepInput{
 		{StepNum: 1, Branch: "step-1", Scope: "backend"},
 		{StepNum: 2, Branch: "step-2", Scope: "backend"},
 	}
-	_, err := db.CreateProject("claim-test", "abc", steps)
+	_, err := db.CreateProject(ctx, "claim-test", "abc", steps)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	step, err := db.ClaimStep("claim-test", "agent-1")
+	step, err := db.ClaimStep(ctx, "claim-test", "agent-1")
 	if err != nil {
 		t.Fatalf("ClaimStep failed: %v", err)
 	}
@@ -283,21 +301,22 @@ func TestClaimStep(t *testing.T) {
 
 func TestClaimStep_NoWorkAvailable(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	steps := []StepInput{{StepNum: 1, Branch: "b", Scope: "s"}}
-	_, err := db.CreateProject("no-work", "abc", steps)
+	_, err := db.CreateProject(ctx, "no-work", "abc", steps)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Claim the only step
-	_, err = db.ClaimStep("no-work", "agent-1")
+	_, err = db.ClaimStep(ctx, "no-work", "agent-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Try to claim again - no work available
-	step, err := db.ClaimStep("no-work", "agent-2")
+	step, err := db.ClaimStep(ctx, "no-work", "agent-2")
 	if err != nil {
 		t.Fatalf("ClaimStep failed: %v", err)
 	}
@@ -308,18 +327,19 @@ func TestClaimStep_NoWorkAvailable(t *testing.T) {
 
 func TestClaimStep_RespectsDependencies(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	steps := []StepInput{
 		{StepNum: 1, Branch: "step-1", Scope: "backend"},
 		{StepNum: 2, Branch: "step-2", Scope: "backend", DependsOn: []int{1}},
 	}
-	_, err := db.CreateProject("dep-test", "abc", steps)
+	_, err := db.CreateProject(ctx, "dep-test", "abc", steps)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Step 1 should be claimable
-	step1, err := db.ClaimStep("dep-test", "agent-1")
+	step1, err := db.ClaimStep(ctx, "dep-test", "agent-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +348,7 @@ func TestClaimStep_RespectsDependencies(t *testing.T) {
 	}
 
 	// Step 2 should not be claimable yet (dependency not completed)
-	step2, err := db.ClaimStep("dep-test", "agent-2")
+	step2, err := db.ClaimStep(ctx, "dep-test", "agent-2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,17 +357,17 @@ func TestClaimStep_RespectsDependencies(t *testing.T) {
 	}
 
 	// Complete step 1
-	err = db.StartStep(step1.ID, nil)
+	err = db.StartStep(ctx, step1.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = db.CompleteStep(step1.ID, "commit123", nil, nil)
+	err = db.CompleteStep(ctx, step1.ID, "commit123", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Now step 2 should be claimable
-	step2, err = db.ClaimStep("dep-test", "agent-2")
+	step2, err = db.ClaimStep(ctx, "dep-test", "agent-2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,10 +381,11 @@ func TestClaimStep_RespectsDependencies(t *testing.T) {
 
 func TestClaimStep_Concurrent(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	// Create project with 1 step
 	steps := []StepInput{{StepNum: 1, Branch: "concurrent", Scope: "backend"}}
-	_, err := db.CreateProject("concurrent-test", "abc", steps)
+	_, err := db.CreateProject(ctx, "concurrent-test", "abc", steps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,19 +393,19 @@ func TestClaimStep_Concurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var claimed int
-	var errors int
+	var errs int
 
 	// 10 goroutines racing to claim the single step
 	for i := range 10 {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			step, err := db.ClaimStep("concurrent-test", fmt.Sprintf("agent-%d", id))
+			step, err := db.ClaimStep(ctx, "concurrent-test", fmt.Sprintf("agent-%d", id))
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
 				// SQLITE_BUSY is expected under high contention
-				errors++
+				errs++
 				return
 			}
 			if step != nil {
@@ -400,33 +421,34 @@ func TestClaimStep_Concurrent(t *testing.T) {
 	if claimed > 1 {
 		t.Errorf("expected at most 1 claim, got %d", claimed)
 	}
-	if claimed == 0 && errors == 0 {
+	if claimed == 0 && errs == 0 {
 		t.Error("expected at least one claim or error")
 	}
 }
 
 func TestStartStep(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	steps := []StepInput{{StepNum: 1, Branch: "b", Scope: "s"}}
-	_, err := db.CreateProject("start-test", "abc", steps)
+	_, err := db.CreateProject(ctx, "start-test", "abc", steps)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	step, err := db.ClaimStep("start-test", "agent-1")
+	step, err := db.ClaimStep(ctx, "start-test", "agent-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	worktree := "/path/to/worktree"
-	err = db.StartStep(step.ID, &worktree)
+	err = db.StartStep(ctx, step.ID, &worktree)
 	if err != nil {
 		t.Fatalf("StartStep failed: %v", err)
 	}
 
 	// Verify step status
-	updatedStep, err := db.GetStep(step.ID)
+	updatedStep, err := db.GetStep(ctx, step.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,28 +462,29 @@ func TestStartStep(t *testing.T) {
 
 func TestStartStep_WrongState(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	steps := []StepInput{{StepNum: 1, Branch: "b", Scope: "s"}}
-	_, err := db.CreateProject("wrong-state", "abc", steps)
+	_, err := db.CreateProject(ctx, "wrong-state", "abc", steps)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Try to start a step that hasn't been claimed
 	// First get the step ID
-	step, err := db.ClaimStep("wrong-state", "agent-1")
+	step, err := db.ClaimStep(ctx, "wrong-state", "agent-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Start it
-	err = db.StartStep(step.ID, nil)
+	err = db.StartStep(ctx, step.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Try to start again (already in_progress)
-	err = db.StartStep(step.ID, nil)
+	err = db.StartStep(ctx, step.ID, nil)
 	if err == nil {
 		t.Fatal("expected error for starting step not in claimed state")
 	}
@@ -469,31 +492,32 @@ func TestStartStep_WrongState(t *testing.T) {
 
 func TestCompleteStep(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	steps := []StepInput{{StepNum: 1, Branch: "b", Scope: "s"}}
-	_, err := db.CreateProject("complete-test", "abc", steps)
+	_, err := db.CreateProject(ctx, "complete-test", "abc", steps)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	step, err := db.ClaimStep("complete-test", "agent-1")
+	step, err := db.ClaimStep(ctx, "complete-test", "agent-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = db.StartStep(step.ID, nil)
+	err = db.StartStep(ctx, step.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	files := []string{"src/main.go", "src/util.go"}
 	notes := "Implemented feature"
-	err = db.CompleteStep(step.ID, "def456", files, &notes)
+	err = db.CompleteStep(ctx, step.ID, "def456", files, &notes)
 	if err != nil {
 		t.Fatalf("CompleteStep failed: %v", err)
 	}
 
 	// Verify
-	updatedStep, err := db.GetStep(step.ID)
+	updatedStep, err := db.GetStep(ctx, step.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,20 +534,21 @@ func TestCompleteStep(t *testing.T) {
 
 func TestCompleteStep_WrongState(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	steps := []StepInput{{StepNum: 1, Branch: "b", Scope: "s"}}
-	_, err := db.CreateProject("complete-wrong", "abc", steps)
+	_, err := db.CreateProject(ctx, "complete-wrong", "abc", steps)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	step, err := db.ClaimStep("complete-wrong", "agent-1")
+	step, err := db.ClaimStep(ctx, "complete-wrong", "agent-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Try to complete without starting
-	err = db.CompleteStep(step.ID, "abc", nil, nil)
+	err = db.CompleteStep(ctx, step.ID, "abc", nil, nil)
 	if err == nil {
 		t.Fatal("expected error for completing step not in progress")
 	}
@@ -531,29 +556,30 @@ func TestCompleteStep_WrongState(t *testing.T) {
 
 func TestFailStep(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	steps := []StepInput{{StepNum: 1, Branch: "b", Scope: "s"}}
-	_, err := db.CreateProject("fail-test", "abc", steps)
+	_, err := db.CreateProject(ctx, "fail-test", "abc", steps)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	step, err := db.ClaimStep("fail-test", "agent-1")
+	step, err := db.ClaimStep(ctx, "fail-test", "agent-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = db.StartStep(step.ID, nil)
+	err = db.StartStep(ctx, step.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = db.FailStep(step.ID, "test failed")
+	err = db.FailStep(ctx, step.ID, "test failed")
 	if err != nil {
 		t.Fatalf("FailStep failed: %v", err)
 	}
 
 	// Verify
-	updatedStep, err := db.GetStep(step.ID)
+	updatedStep, err := db.GetStep(ctx, step.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -569,26 +595,27 @@ func TestFailStep(t *testing.T) {
 
 func TestHeartbeat(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	steps := []StepInput{{StepNum: 1, Branch: "b", Scope: "s"}}
-	_, err := db.CreateProject("heartbeat-test", "abc", steps)
+	_, err := db.CreateProject(ctx, "heartbeat-test", "abc", steps)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	step, err := db.ClaimStep("heartbeat-test", "agent-1")
+	step, err := db.ClaimStep(ctx, "heartbeat-test", "agent-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Heartbeat should succeed without error
-	err = db.Heartbeat(step.ID, "agent-1")
+	err = db.Heartbeat(ctx, step.ID, "agent-1")
 	if err != nil {
 		t.Fatalf("Heartbeat failed: %v", err)
 	}
 
 	// Verify step still has valid heartbeat
-	updatedStep, err := db.GetStep(step.ID)
+	updatedStep, err := db.GetStep(ctx, step.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -599,20 +626,21 @@ func TestHeartbeat(t *testing.T) {
 
 func TestHeartbeat_WrongAgent(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	steps := []StepInput{{StepNum: 1, Branch: "b", Scope: "s"}}
-	_, err := db.CreateProject("heartbeat-wrong", "abc", steps)
+	_, err := db.CreateProject(ctx, "heartbeat-wrong", "abc", steps)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	step, err := db.ClaimStep("heartbeat-wrong", "agent-1")
+	step, err := db.ClaimStep(ctx, "heartbeat-wrong", "agent-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Try heartbeat from wrong agent
-	err = db.Heartbeat(step.ID, "agent-2")
+	err = db.Heartbeat(ctx, step.ID, "agent-2")
 	if err == nil {
 		t.Fatal("expected error for heartbeat from wrong agent")
 	}
@@ -620,28 +648,29 @@ func TestHeartbeat_WrongAgent(t *testing.T) {
 
 func TestHeartbeat_WrongState(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	steps := []StepInput{{StepNum: 1, Branch: "b", Scope: "s"}}
-	_, err := db.CreateProject("heartbeat-state", "abc", steps)
+	_, err := db.CreateProject(ctx, "heartbeat-state", "abc", steps)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	step, err := db.ClaimStep("heartbeat-state", "agent-1")
+	step, err := db.ClaimStep(ctx, "heartbeat-state", "agent-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = db.StartStep(step.ID, nil)
+	err = db.StartStep(ctx, step.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = db.CompleteStep(step.ID, "abc", nil, nil)
+	err = db.CompleteStep(ctx, step.ID, "abc", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Try heartbeat on completed step
-	err = db.Heartbeat(step.ID, "agent-1")
+	err = db.Heartbeat(ctx, step.ID, "agent-1")
 	if err == nil {
 		t.Fatal("expected error for heartbeat on completed step")
 	}
@@ -651,14 +680,15 @@ func TestHeartbeat_WrongState(t *testing.T) {
 
 func TestDetectStaleWork(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	steps := []StepInput{{StepNum: 1, Branch: "b", Scope: "s"}}
-	_, err := db.CreateProject("stale-test", "abc", steps)
+	_, err := db.CreateProject(ctx, "stale-test", "abc", steps)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	step, err := db.ClaimStep("stale-test", "agent-1")
+	step, err := db.ClaimStep(ctx, "stale-test", "agent-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -673,7 +703,7 @@ func TestDetectStaleWork(t *testing.T) {
 	}
 
 	// With default timeout (15 min), the step should be detected as stale
-	staleSteps, err := db.DetectStaleWork(15)
+	staleSteps, err := db.DetectStaleWork(ctx, 15)
 	if err != nil {
 		t.Fatalf("DetectStaleWork failed: %v", err)
 	}
@@ -692,30 +722,31 @@ func TestDetectStaleWork(t *testing.T) {
 
 func TestRecoverStep(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	steps := []StepInput{{StepNum: 1, Branch: "b", Scope: "s"}}
-	_, err := db.CreateProject("recover-test", "abc", steps)
+	_, err := db.CreateProject(ctx, "recover-test", "abc", steps)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	step, err := db.ClaimStep("recover-test", "agent-1")
+	step, err := db.ClaimStep(ctx, "recover-test", "agent-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = db.StartStep(step.ID, nil)
+	err = db.StartStep(ctx, step.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Recover the step
-	err = db.RecoverStep(step.ID)
+	err = db.RecoverStep(ctx, step.ID)
 	if err != nil {
 		t.Fatalf("RecoverStep failed: %v", err)
 	}
 
 	// Verify step is reset
-	recoveredStep, err := db.GetStep(step.ID)
+	recoveredStep, err := db.GetStep(ctx, step.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -729,34 +760,35 @@ func TestRecoverStep(t *testing.T) {
 
 func TestRecoverFailedStep(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	steps := []StepInput{{StepNum: 1, Branch: "b", Scope: "s"}}
-	_, err := db.CreateProject("recover-failed", "abc", steps)
+	_, err := db.CreateProject(ctx, "recover-failed", "abc", steps)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	step, err := db.ClaimStep("recover-failed", "agent-1")
+	step, err := db.ClaimStep(ctx, "recover-failed", "agent-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = db.StartStep(step.ID, nil)
+	err = db.StartStep(ctx, step.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = db.FailStep(step.ID, "original failure")
+	err = db.FailStep(ctx, step.ID, "original failure")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Recover the failed step
-	err = db.RecoverFailedStep(step.ID)
+	err = db.RecoverFailedStep(ctx, step.ID)
 	if err != nil {
 		t.Fatalf("RecoverFailedStep failed: %v", err)
 	}
 
 	// Verify step is reset
-	recoveredStep, err := db.GetStep(step.ID)
+	recoveredStep, err := db.GetStep(ctx, step.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -784,40 +816,41 @@ func TestRecoverFailedStep(t *testing.T) {
 
 func TestGetMetrics(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	steps := []StepInput{
 		{StepNum: 1, Branch: "step-1", Scope: "backend"},
 		{StepNum: 2, Branch: "step-2", Scope: "frontend"},
 		{StepNum: 3, Branch: "step-3", Scope: "backend"},
 	}
-	_, err := db.CreateProject("metrics-test", "abc", steps)
+	_, err := db.CreateProject(ctx, "metrics-test", "abc", steps)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Complete one step
-	step1, err := db.ClaimStep("metrics-test", "agent-1")
+	step1, err := db.ClaimStep(ctx, "metrics-test", "agent-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.StartStep(step1.ID, nil); err != nil {
+	if err := db.StartStep(ctx, step1.ID, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.CompleteStep(step1.ID, "abc", nil, nil); err != nil {
+	if err := db.CompleteStep(ctx, step1.ID, "abc", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
 	// Start another
-	step2, err := db.ClaimStep("metrics-test", "agent-2")
+	step2, err := db.ClaimStep(ctx, "metrics-test", "agent-2")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.StartStep(step2.ID, nil); err != nil {
+	if err := db.StartStep(ctx, step2.ID, nil); err != nil {
 		t.Fatal(err)
 	}
 
 	projectName := "metrics-test"
-	metrics, err := db.GetMetrics(&projectName, nil)
+	metrics, err := db.GetMetrics(ctx, &projectName, nil)
 	if err != nil {
 		t.Fatalf("GetMetrics failed: %v", err)
 	}
@@ -843,29 +876,30 @@ func TestGetMetrics(t *testing.T) {
 
 func TestGetAgentEvents(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	steps := []StepInput{{StepNum: 1, Branch: "b", Scope: "s"}}
-	_, err := db.CreateProject("events-test", "abc", steps)
+	_, err := db.CreateProject(ctx, "events-test", "abc", steps)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	step, err := db.ClaimStep("events-test", "agent-1")
+	step, err := db.ClaimStep(ctx, "events-test", "agent-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.StartStep(step.ID, nil); err != nil {
+	if err := db.StartStep(ctx, step.ID, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Heartbeat(step.ID, "agent-1"); err != nil {
+	if err := db.Heartbeat(ctx, step.ID, "agent-1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.CompleteStep(step.ID, "abc", nil, nil); err != nil {
+	if err := db.CompleteStep(ctx, step.ID, "abc", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
 	agentID := "agent-1"
-	events, err := db.GetAgentEvents(&agentID, nil, 10)
+	events, err := db.GetAgentEvents(ctx, &agentID, nil, 10)
 	if err != nil {
 		t.Fatalf("GetAgentEvents failed: %v", err)
 	}
@@ -893,20 +927,21 @@ func TestGetAgentEvents(t *testing.T) {
 
 func TestGetAvailableSteps(t *testing.T) {
 	db := newTestDB(t)
+	ctx := context.Background()
 
 	steps := []StepInput{
 		{StepNum: 1, Branch: "step-1", Scope: "backend"},
 		{StepNum: 2, Branch: "step-2", Scope: "frontend"},
 		{StepNum: 3, Branch: "step-3", Scope: "backend", DependsOn: []int{1}},
 	}
-	_, err := db.CreateProject("available-test", "abc", steps)
+	_, err := db.CreateProject(ctx, "available-test", "abc", steps)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	t.Run("all available", func(t *testing.T) {
 		projectName := "available-test"
-		available, err := db.GetAvailableSteps(&projectName, nil)
+		available, err := db.GetAvailableSteps(ctx, &projectName, nil)
 		if err != nil {
 			t.Fatalf("GetAvailableSteps failed: %v", err)
 		}
@@ -919,7 +954,7 @@ func TestGetAvailableSteps(t *testing.T) {
 	t.Run("filter by scope", func(t *testing.T) {
 		projectName := "available-test"
 		scope := "backend"
-		available, err := db.GetAvailableSteps(&projectName, &scope)
+		available, err := db.GetAvailableSteps(ctx, &projectName, &scope)
 		if err != nil {
 			t.Fatalf("GetAvailableSteps failed: %v", err)
 		}

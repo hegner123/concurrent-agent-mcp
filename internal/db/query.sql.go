@@ -1039,6 +1039,54 @@ func (q *Queries) GetStep(ctx context.Context, id StepID) (Step, error) {
 	return i, err
 }
 
+const getStepsByProjectID = `-- name: GetStepsByProjectID :many
+SELECT id, project_id, step_num, branch, scope, status,
+       worktree, agent_id, claimed_at, started_at, completed_at,
+       last_heartbeat, last_commit, files_modified, notes
+FROM steps
+WHERE project_id = ?
+ORDER BY step_num ASC
+`
+
+func (q *Queries) GetStepsByProjectID(ctx context.Context, projectID ProjectID) ([]Step, error) {
+	rows, err := q.db.QueryContext(ctx, getStepsByProjectID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Step{}
+	for rows.Next() {
+		var i Step
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.StepNum,
+			&i.Branch,
+			&i.Scope,
+			&i.Status,
+			&i.Worktree,
+			&i.AgentID,
+			&i.ClaimedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.LastHeartbeat,
+			&i.LastCommit,
+			&i.FilesModified,
+			&i.Notes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertAgentEvent = `-- name: InsertAgentEvent :exec
 INSERT INTO agent_events (agent_id, project_id, step_id, event_type)
 VALUES (?, ?, ?, ?)

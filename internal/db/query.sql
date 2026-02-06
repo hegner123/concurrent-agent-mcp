@@ -34,6 +34,14 @@ INSERT INTO dependencies (step_id, depends_on_step_id)
 SELECT ?, id FROM steps
 WHERE project_id = ? AND step_num = ?;
 
+-- name: GetStepsByProjectID :many
+SELECT id, project_id, step_num, branch, scope, status,
+       worktree, agent_id, claimed_at, started_at, completed_at,
+       last_heartbeat, last_commit, files_modified, notes
+FROM steps
+WHERE project_id = ?
+ORDER BY step_num ASC;
+
 -- name: GetStep :one
 SELECT id, project_id, step_num, branch, scope, status,
        worktree, agent_id, claimed_at, started_at, completed_at,

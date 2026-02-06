@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -23,10 +23,12 @@ func NewDB(path string) (*DB, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
-	// Configure connection pool
-	conn.SetMaxOpenConns(25)
-	conn.SetMaxIdleConns(5)
-	conn.SetConnMaxLifetime(time.Hour)
+	// WAL allows concurrent readers but only one writer.
+	// Keep pool small: pragmas are per-connection and must be applied to each.
+	// With MaxOpenConns(1), all queries use the single connection that has pragmas set.
+	conn.SetMaxOpenConns(1)
+	conn.SetMaxIdleConns(1)
+	conn.SetConnMaxLifetime(0)
 
 	// Configure SQLite for concurrent access
 	pragmas := []string{
@@ -81,14 +83,13 @@ func (db *DB) migrate() error {
 
 	// If schema_migrations exists, check if migration is already applied
 	if count > 0 {
-		var version int
-		err = db.conn.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 1`).Scan(&version)
+		var v1 int
+		err = db.conn.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 1`).Scan(&v1)
 		if err != nil {
 			return fmt.Errorf("check migration version: %w", err)
 		}
-		if version > 0 {
-			// Migration already applied
-			return nil
+		if v1 > 0 {
+			return db.migrateV2()
 		}
 	}
 
@@ -197,6 +198,29 @@ func (db *DB) migrate() error {
 		return fmt.Errorf("execute migration: %w", err)
 	}
 
+	return db.migrateV2()
+}
+
+// migrateV2 adds composite index for ClaimStep performance
+func (db *DB) migrateV2() error {
+	var v2 int
+	err := db.conn.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 2`).Scan(&v2)
+	if err != nil {
+		return fmt.Errorf("check migration v2: %w", err)
+	}
+	if v2 > 0 {
+		return nil
+	}
+
+	v2Schema := `
+		CREATE INDEX IF NOT EXISTS idx_steps_project_status_stepnum ON steps(project_id, status, step_num);
+		DROP INDEX IF EXISTS idx_steps_project_id;
+		INSERT OR IGNORE INTO schema_migrations (version) VALUES (2);
+	`
+	if _, err := db.conn.Exec(v2Schema); err != nil {
+		return fmt.Errorf("execute migration v2: %w", err)
+	}
+
 	return nil
 }
 
@@ -209,10 +233,8 @@ type StepInput struct {
 }
 
 // CreateProject creates a new project with steps
-func (db *DB) CreateProject(name, baseCommit string, steps []StepInput) (*Project, error) {
-	ctx := context.Background()
-
-	tx, err := db.conn.Begin()
+func (db *DB) CreateProject(ctx context.Context, name, baseCommit string, steps []StepInput) (*Project, error) {
+	tx, err := db.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin transaction: %w", err)
 	}
@@ -268,21 +290,28 @@ func (db *DB) CreateProject(name, baseCommit string, steps []StepInput) (*Projec
 	return &project, nil
 }
 
-// GetProject gets a project by name
-func (db *DB) GetProject(name string) (*Project, error) {
-	ctx := context.Background()
+// ProjectWithSteps wraps a project with its steps for API responses
+type ProjectWithSteps struct {
+	Project Project `json:"project"`
+	Steps   []Step  `json:"steps"`
+}
+
+// GetProject gets a project by name with all its steps
+func (db *DB) GetProject(ctx context.Context, name string) (*ProjectWithSteps, error) {
 	p, err := db.queries.GetProject(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	return &p, nil
+	steps, err := db.queries.GetStepsByProjectID(ctx, p.ID)
+	if err != nil {
+		return nil, fmt.Errorf("get steps: %w", err)
+	}
+	return &ProjectWithSteps{Project: p, Steps: steps}, nil
 }
 
 // ClaimStep atomically claims the next available step
-func (db *DB) ClaimStep(projectName, agentID string) (*Step, error) {
-	ctx := context.Background()
-
-	tx, err := db.conn.Begin()
+func (db *DB) ClaimStep(ctx context.Context, projectName, agentID string) (*Step, error) {
+	tx, err := db.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin transaction: %w", err)
 	}
@@ -294,7 +323,7 @@ func (db *DB) ClaimStep(projectName, agentID string) (*Step, error) {
 		AgentID: sql.NullString{String: agentID, Valid: true},
 		Name:    projectName,
 	})
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil // No work available
 	}
 	if err != nil {
@@ -333,9 +362,7 @@ func (db *DB) ClaimStep(projectName, agentID string) (*Step, error) {
 }
 
 // Heartbeat updates step heartbeat
-func (db *DB) Heartbeat(stepID StepID, agentID string) error {
-	ctx := context.Background()
-
+func (db *DB) Heartbeat(ctx context.Context, stepID StepID, agentID string) error {
 	result, err := db.queries.UpdateHeartbeat(ctx, UpdateHeartbeatParams{
 		ID:      stepID,
 		AgentID: sql.NullString{String: agentID, Valid: true},
@@ -352,21 +379,20 @@ func (db *DB) Heartbeat(stepID StepID, agentID string) error {
 		return fmt.Errorf("step not found or not owned by agent")
 	}
 
-	// Record event (silently fail if error)
-	db.queries.InsertAgentEvent(ctx, InsertAgentEventParams{
+	if evtErr := db.queries.InsertAgentEvent(ctx, InsertAgentEventParams{
 		AgentID:   agentID,
 		StepID:    NullStepID{StepID: stepID, Valid: true},
 		EventType: EventTypeHeartbeat,
-	})
+	}); evtErr != nil {
+		return fmt.Errorf("heartbeat succeeded but event insert failed: %w", evtErr)
+	}
 
 	return nil
 }
 
 // StartStep marks a claimed step as in progress
-func (db *DB) StartStep(stepID StepID, worktree *string) error {
-	ctx := context.Background()
-
-	tx, err := db.conn.Begin()
+func (db *DB) StartStep(ctx context.Context, stepID StepID, worktree *string) error {
+	tx, err := db.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
@@ -412,10 +438,8 @@ func (db *DB) StartStep(stepID StepID, worktree *string) error {
 }
 
 // CompleteStep marks a step as completed
-func (db *DB) CompleteStep(stepID StepID, commitHash string, filesModified []string, notes *string) error {
-	ctx := context.Background()
-
-	tx, err := db.conn.Begin()
+func (db *DB) CompleteStep(ctx context.Context, stepID StepID, commitHash string, filesModified []string, notes *string) error {
+	tx, err := db.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
@@ -473,10 +497,8 @@ func (db *DB) CompleteStep(stepID StepID, commitHash string, filesModified []str
 }
 
 // FailStep marks a step as failed
-func (db *DB) FailStep(stepID StepID, reason string) error {
-	ctx := context.Background()
-
-	tx, err := db.conn.Begin()
+func (db *DB) FailStep(ctx context.Context, stepID StepID, reason string) error {
+	tx, err := db.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
@@ -524,8 +546,7 @@ func (db *DB) FailStep(stepID StepID, reason string) error {
 }
 
 // GetStep gets a step by ID
-func (db *DB) GetStep(stepID StepID) (*Step, error) {
-	ctx := context.Background()
+func (db *DB) GetStep(ctx context.Context, stepID StepID) (*Step, error) {
 	s, err := db.queries.GetStep(ctx, stepID)
 	if err != nil {
 		return nil, err
@@ -534,19 +555,19 @@ func (db *DB) GetStep(stepID StepID) (*Step, error) {
 }
 
 // ListProjects lists projects with optional status filter
-func (db *DB) ListProjects(status *string) ([]Project, error) {
-	ctx := context.Background()
-
+func (db *DB) ListProjects(ctx context.Context, status *string) ([]Project, error) {
 	if status != nil {
-		return db.queries.ListProjectsByStatus(ctx, ProjectStatus(*status))
+		ps := ProjectStatus(*status)
+		if !ps.Valid() {
+			return nil, fmt.Errorf("invalid project status: %q", *status)
+		}
+		return db.queries.ListProjectsByStatus(ctx, ps)
 	}
 	return db.queries.ListProjectsAll(ctx)
 }
 
 // GetAvailableSteps gets all steps available to work on
-func (db *DB) GetAvailableSteps(projectName *string, scope *string) ([]Step, error) {
-	ctx := context.Background()
-
+func (db *DB) GetAvailableSteps(ctx context.Context, projectName *string, scope *string) ([]Step, error) {
 	if projectName != nil && scope != nil {
 		return db.queries.GetAvailableStepsByProjectAndScope(ctx, GetAvailableStepsByProjectAndScopeParams{
 			Name:  *projectName,
@@ -564,7 +585,7 @@ func (db *DB) GetAvailableSteps(projectName *string, scope *string) ([]Step, err
 
 // DetectStaleWork finds steps with stale heartbeats
 // This method uses raw SQL because sqlc doesn't support parameterized time intervals
-func (db *DB) DetectStaleWork(timeoutMinutes int) ([]Step, error) {
+func (db *DB) DetectStaleWork(ctx context.Context, timeoutMinutes int) ([]Step, error) {
 	if timeoutMinutes <= 0 {
 		timeoutMinutes = 15
 	}
@@ -578,7 +599,7 @@ func (db *DB) DetectStaleWork(timeoutMinutes int) ([]Step, error) {
 		AND (last_heartbeat IS NULL OR last_heartbeat < datetime('now', '-%d minutes'))
 	`, timeoutMinutes)
 
-	rows, err := db.conn.Query(query)
+	rows, err := db.conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("query stale steps: %w", err)
 	}
@@ -606,10 +627,8 @@ func (db *DB) DetectStaleWork(timeoutMinutes int) ([]Step, error) {
 }
 
 // RecoverStep resets a stale step to not_started
-func (db *DB) RecoverStep(stepID StepID) error {
-	ctx := context.Background()
-
-	tx, err := db.conn.Begin()
+func (db *DB) RecoverStep(ctx context.Context, stepID StepID) error {
+	tx, err := db.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
@@ -648,10 +667,8 @@ func (db *DB) RecoverStep(stepID StepID) error {
 }
 
 // RecoverFailedStep archives a failed step to history and resets it to not_started
-func (db *DB) RecoverFailedStep(stepID StepID) error {
-	ctx := context.Background()
-
-	tx, err := db.conn.Begin()
+func (db *DB) RecoverFailedStep(ctx context.Context, stepID StepID) error {
+	tx, err := db.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
@@ -662,7 +679,7 @@ func (db *DB) RecoverFailedStep(stepID StepID) error {
 	// Get the failed step
 	step, err := qtx.GetFailedStep(ctx, stepID)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("step not found or not in failed state")
 		}
 		return fmt.Errorf("get failed step: %w", err)
@@ -721,14 +738,14 @@ func (db *DB) RecoverFailedStep(stepID StepID) error {
 }
 
 // AutoRecover detects stale work and recovers it automatically
-func (db *DB) AutoRecover(timeoutMinutes int) (int, error) {
-	stale, err := db.DetectStaleWork(timeoutMinutes)
+func (db *DB) AutoRecover(ctx context.Context, timeoutMinutes int) (int, error) {
+	stale, err := db.DetectStaleWork(ctx, timeoutMinutes)
 	if err != nil {
 		return 0, fmt.Errorf("detect stale work: %w", err)
 	}
 	recovered := 0
 	for _, step := range stale {
-		if err := db.RecoverStep(step.ID); err != nil {
+		if err := db.RecoverStep(ctx, step.ID); err != nil {
 			continue // Step may have been recovered by another path
 		}
 		recovered++
@@ -747,9 +764,7 @@ type Metrics struct {
 }
 
 // GetMetrics calculates project and agent metrics
-func (db *DB) GetMetrics(projectName *string, agentID *string) (*Metrics, error) {
-	ctx := context.Background()
-
+func (db *DB) GetMetrics(ctx context.Context, projectName *string, agentID *string) (*Metrics, error) {
 	var m Metrics
 	var total int64
 	var completed, failed, inProgress, avgHours sql.NullFloat64
@@ -852,9 +867,7 @@ type AgentEventResult struct {
 }
 
 // GetAgentEvents gets agent activity log
-func (db *DB) GetAgentEvents(agentID *string, projectName *string, limit int) ([]AgentEventResult, error) {
-	ctx := context.Background()
-
+func (db *DB) GetAgentEvents(ctx context.Context, agentID *string, projectName *string, limit int) ([]AgentEventResult, error) {
 	if limit <= 0 {
 		limit = 100
 	}

@@ -78,7 +78,7 @@ func run() error {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				database.AutoRecover(15)
+				database.AutoRecover(ctx, 15)
 			}
 		}
 	}()
