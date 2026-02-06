@@ -1,7 +1,7 @@
 .PHONY: build install test clean dev run
 
 # Binary name
-BINARY_NAME=concurrent-agent-mcp
+BINARY_NAME=hq
 INSTALL_PATH=/usr/local/bin
 
 # Build the binary

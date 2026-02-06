@@ -45,12 +45,18 @@ Agent 2 → claim_step() → picks up abandoned work
 **Database:** Single SQLite database with WAL mode for concurrent access
 **Location:** `~/.claude/agent-coordination.db`
 **Transport:** stdio (MCP standard)
+**Query Layer:** sqlc-generated type-safe Go code
 
 **Schema:**
 - `projects` - Top-level projects
 - `steps` - Individual work items
 - `dependencies` - Step dependencies
 - `agent_events` - Audit trail
+
+**Type Safety:**
+- Custom ID types (`ProjectID`, `StepID`) prevent mixing IDs
+- Enum types (`StepStatus`, `ProjectStatus`, `EventType`) catch typos at compile time
+- sqlc generates type-safe query functions from annotated SQL
 
 ## Installation
 
@@ -61,13 +67,13 @@ Agent 2 → claim_step() → picks up abandoned work
 ### Build
 ```bash
 make build
-# Binary: ./bin/concurrent-agent-mcp
+# Binary: ./bin/hq
 ```
 
 ### Install
 ```bash
 make install
-# Installs to: /usr/local/bin/concurrent-agent-mcp
+# Installs to: /usr/local/bin/hq
 ```
 
 ## MCP Configuration
@@ -76,14 +82,14 @@ Add to Claude Code MCP settings:
 
 **User scope** (recommended - available to all Claude instances):
 ```bash
-claude mcp add --scope user --transport stdio concurrent-agent-mcp -- \
-  /usr/local/bin/concurrent-agent-mcp
+claude mcp add --scope user --transport stdio hq -- \
+  /usr/local/bin/hq
 ```
 
 **Project scope** (project-specific):
 ```bash
-claude mcp add --scope project --transport stdio concurrent-agent-mcp -- \
-  /usr/local/bin/concurrent-agent-mcp
+claude mcp add --scope project --transport stdio hq -- \
+  /usr/local/bin/hq
 ```
 
 ### Configuration File
@@ -92,8 +98,8 @@ If using `.mcp.json`:
 ```json
 {
   "mcpServers": {
-    "concurrent-agent-mcp": {
-      "command": "/usr/local/bin/concurrent-agent-mcp",
+    "hq": {
+      "command": "/usr/local/bin/hq",
       "args": [],
       "env": {
         "AGENT_DB_PATH": "${HOME}/.claude/agent-coordination.db"

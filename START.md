@@ -6,7 +6,7 @@ This is a Go-based MCP (Model Context Protocol) server for coordinating multiple
 
 ## Onboarding
 
-Welcome to the concurrent-agent-mcp project. Here's what you need to know:
+Welcome to the hq project. Here's what you need to know:
 
 **Key Directories:**
 - `internal/db/` - Database layer with transaction-safe operations

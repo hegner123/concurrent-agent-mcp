@@ -4,7 +4,7 @@ System design for concurrent agent coordination via MCP.
 
 ## Overview
 
-The concurrent-agent-mcp server provides a coordination layer for multiple AI agents working in parallel. It solves the fundamental problem of concurrent task assignment, dependency management, and crash recovery.
+The hq server provides a coordination layer for multiple AI agents working in parallel. It solves the fundamental problem of concurrent task assignment, dependency management, and crash recovery.
 
 ## Design Principles
 
@@ -30,7 +30,7 @@ The concurrent-agent-mcp server provides a coordination layer for multiple AI ag
                    MCP stdio
                       │
         ┌─────────────▼──────────────┐
-        │  concurrent-agent-mcp      │
+        │  hq      │
         │  (Go binary)                │
         │                             │
         │  ┌────────────────────┐    │
@@ -41,8 +41,9 @@ The concurrent-agent-mcp server provides a coordination layer for multiple AI ag
         │           │                 │
         │  ┌────────▼───────────┐    │
         │  │  Database Layer    │    │
-        │  │  - Queries         │    │
-        │  │  - Transactions    │    │
+        │  │  - sqlc Queries    │    │
+        │  │  - Store wrapper   │    │
+        │  │  - Typed IDs/Enums │    │
         │  └────────┬───────────┘    │
         └───────────┼─────────────────┘
                     │
@@ -53,6 +54,70 @@ The concurrent-agent-mcp server provides a coordination layer for multiple AI ag
         │  (WAL mode)           │
         └───────────────────────┘
 ```
+
+## Type System
+
+### Custom ID Types
+
+Type-safe identifiers prevent mixing different ID types:
+
+```go
+type ProjectID int64
+type StepID int64
+type AgentEventID int64
+
+// Compile-time error: cannot pass ProjectID where StepID expected
+func GetStep(id StepID) (*Step, error)
+```
+
+Nullable versions for foreign keys:
+```go
+type NullProjectID struct { ProjectID; Valid bool }
+type NullStepID struct { StepID; Valid bool }
+```
+
+### Status Enum Types
+
+Compile-time safety for status values:
+
+```go
+type StepStatus string
+const (
+    StepStatusNotStarted StepStatus = "not_started"
+    StepStatusClaimed    StepStatus = "claimed"
+    StepStatusInProgress StepStatus = "in_progress"
+    StepStatusCompleted  StepStatus = "completed"
+    StepStatusFailed     StepStatus = "failed"
+    StepStatusMerged     StepStatus = "merged"
+)
+
+// Helper methods
+func (s StepStatus) Valid() bool      // Check if valid status
+func (s StepStatus) IsActive() bool   // claimed or in_progress
+func (s StepStatus) IsDone() bool     // completed, failed, or merged
+```
+
+### sqlc Code Generation
+
+SQL queries are defined in `query.sql` with annotations:
+
+```sql
+-- name: ClaimStep :one
+UPDATE steps SET status = 'claimed', agent_id = ?
+WHERE id = (SELECT ... ) RETURNING ...;
+```
+
+sqlc generates type-safe Go functions:
+
+```go
+func (q *Queries) ClaimStep(ctx context.Context, arg ClaimStepParams) (ClaimStepRow, error)
+```
+
+**Benefits:**
+- Compile-time SQL validation
+- Generated parameter and return types
+- No manual row scanning
+- IDE autocompletion for queries
 
 ## Data Flow
 
@@ -230,15 +295,26 @@ Not applicable - local database, no network.
 
 1. Add tool to `registerTools()` in `main.go`
 2. Implement handler in `internal/mcp/handlers.go`
-3. Add database method if needed in `internal/db/db.go`
-4. Update README.md with tool documentation
+3. Add query to `internal/db/query.sql` with sqlc annotation
+4. Run `sqlc generate`
+5. Add wrapper method to `internal/db/store.go` if needed
+6. Update README.md with tool documentation
 
 ### Adding New Fields
 
-1. Create migration SQL in `migrations/`
-2. Update schema in `internal/db/db.go` (struct fields)
-3. Update queries to include new fields
-4. Increment migration version
+1. Update `internal/db/schema.sql`
+2. Update migration in `internal/db/store.go:migrate()`
+3. Add query or update existing queries in `internal/db/query.sql`
+4. Add type override to `sqlc.yaml` if custom type needed
+5. Run `sqlc generate`
+6. Update wrapper methods in `store.go` if needed
+
+### Adding New Enum Values
+
+1. Add constant to enum type in `internal/db/types.go`
+2. Update `Valid()` method
+3. Update CHECK constraint in `schema.sql` and `store.go:migrate()`
+4. Run `sqlc generate`
 
 ### Supporting New Workflows
 

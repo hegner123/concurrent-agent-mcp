@@ -1,22 +1,22 @@
 # Quick Start Guide
 
-Get the concurrent-agent-mcp server running in 5 minutes.
+Get the hq server running in 5 minutes.
 
 ## 1. Build
 
 ```bash
-cd ~/Documents/Code/concurrent-agent-mcp
+cd ~/Documents/Code/hq
 make deps
 make build
 ```
 
-This creates `bin/concurrent-agent-mcp`.
+This creates `bin/hq`.
 
 ## 2. Test Locally
 
 **Terminal 1 - Start the server:**
 ```bash
-./bin/concurrent-agent-mcp
+./bin/hq
 ```
 
 The server:
@@ -30,15 +30,15 @@ The server:
 make install
 ```
 
-This installs to `/usr/local/bin/concurrent-agent-mcp`.
+This installs to `/usr/local/bin/hq`.
 
 ## 4. Configure Claude Code
 
 Add to your MCP configuration (user scope for global access):
 
 ```bash
-claude mcp add --scope user --transport stdio concurrent-agent-mcp -- \
-  /usr/local/bin/concurrent-agent-mcp
+claude mcp add --scope user --transport stdio hq -- \
+  /usr/local/bin/hq
 ```
 
 Verify it's installed:
@@ -46,7 +46,7 @@ Verify it's installed:
 claude mcp list
 ```
 
-You should see `concurrent-agent-mcp` in the list.
+You should see `hq` in the list.
 
 ## 5. Test from Claude
 
@@ -55,7 +55,7 @@ You should see `concurrent-agent-mcp` in the list.
 /mcp
 ```
 
-You should see all the concurrent-agent-mcp tools listed.
+You should see all the hq tools listed.
 
 **Create a test project:**
 ```
@@ -246,7 +246,7 @@ sqlite3 ~/.claude/agent-coordination.db "PRAGMA journal_mode;"
 **Server not responding:**
 ```bash
 # Check if server is running
-ps aux | grep concurrent-agent-mcp
+ps aux | grep hq
 
 # Check for errors
 # Server logs to stderr if there are issues

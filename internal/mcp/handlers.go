@@ -3,10 +3,61 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 
+	"github.com/hegner123/hq/internal/db"
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/yourusername/concurrent-agent-mcp/internal/db"
 )
+
+// parseInt extracts an int from arguments by key, handling int, float64, and string formats
+func parseInt(arguments map[string]any, key string) (int, bool) {
+	switch v := arguments[key].(type) {
+	case int:
+		return v, true
+	case float64:
+		return int(v), true
+	case string:
+		s := strings.Trim(v, "\"")
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	default:
+		return 0, false
+	}
+}
+
+// parseString extracts a string from arguments by key, handling string, int, and float64 formats
+func toInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case float64:
+		return int(n), true
+	default:
+		return 0, false
+	}
+}
+
+func parseString(arguments map[string]any, key string) (string, bool) {
+	switch v := arguments[key].(type) {
+	case string:
+		return v, true
+	case int:
+		return strconv.Itoa(v), true
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64), true
+	default:
+		return "", false
+	}
+}
+
+// parseStepID extracts step_id from arguments
+func parseStepID(arguments map[string]any) (int, bool) {
+	return parseInt(arguments, "step_id")
+}
 
 // Handlers contains MCP tool handlers
 type Handlers struct {
@@ -19,21 +70,21 @@ func NewHandlers(database *db.DB) *Handlers {
 }
 
 // CreateProject handles create_project tool
-func (h *Handlers) CreateProject(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
-	name, ok := arguments["name"].(string)
+func (h *Handlers) CreateProject(arguments map[string]any) (*mcp.CallToolResult, error) {
+	name, ok := parseString(arguments, "name")
 	if !ok {
-		return mcp.NewToolResultError("name must be a string"), nil
+		return mcp.NewToolResultError("name is required"), nil
 	}
 
-	baseCommit, ok := arguments["base_commit"].(string)
+	baseCommit, ok := parseString(arguments, "base_commit")
 	if !ok {
-		return mcp.NewToolResultError("base_commit must be a string"), nil
+		return mcp.NewToolResultError("base_commit is required"), nil
 	}
 
-	// Handle steps - can be either []interface{} or string (JSON)
-	var stepsRaw []interface{}
+	// Handle steps - can be either []any or string (JSON)
+	var stepsRaw []any
 	switch v := arguments["steps"].(type) {
-	case []interface{}:
+	case []any:
 		stepsRaw = v
 	case string:
 		// Parse JSON string
@@ -47,12 +98,12 @@ func (h *Handlers) CreateProject(arguments map[string]interface{}) (*mcp.CallToo
 	// Parse steps
 	var steps []db.StepInput
 	for _, stepRaw := range stepsRaw {
-		stepMap, ok := stepRaw.(map[string]interface{})
+		stepMap, ok := stepRaw.(map[string]any)
 		if !ok {
 			return mcp.NewToolResultError("each step must be an object"), nil
 		}
 
-		stepNum, ok := stepMap["step_num"].(float64)
+		stepNum, ok := parseInt(stepMap, "step_num")
 		if !ok {
 			return mcp.NewToolResultError("step_num must be a number"), nil
 		}
@@ -68,13 +119,13 @@ func (h *Handlers) CreateProject(arguments map[string]interface{}) (*mcp.CallToo
 		}
 
 		var dependsOn []int
-		if depsRaw, ok := stepMap["depends_on"].([]interface{}); ok {
+		if depsRaw, ok := stepMap["depends_on"].([]any); ok {
 			for _, depRaw := range depsRaw {
-				dep, ok := depRaw.(float64)
+				dep, ok := toInt(depRaw)
 				if !ok {
 					return mcp.NewToolResultError("depends_on must be array of numbers"), nil
 				}
-				dependsOn = append(dependsOn, int(dep))
+				dependsOn = append(dependsOn, dep)
 			}
 		}
 
@@ -100,10 +151,10 @@ func (h *Handlers) CreateProject(arguments map[string]interface{}) (*mcp.CallToo
 }
 
 // GetProject handles get_project tool
-func (h *Handlers) GetProject(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
-	name, ok := arguments["name"].(string)
+func (h *Handlers) GetProject(arguments map[string]any) (*mcp.CallToolResult, error) {
+	name, ok := parseString(arguments, "name")
 	if !ok {
-		return mcp.NewToolResultError("name must be a string"), nil
+		return mcp.NewToolResultError("name is required"), nil
 	}
 
 	project, err := h.db.GetProject(name)
@@ -120,9 +171,9 @@ func (h *Handlers) GetProject(arguments map[string]interface{}) (*mcp.CallToolRe
 }
 
 // ListProjects handles list_projects tool
-func (h *Handlers) ListProjects(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+func (h *Handlers) ListProjects(arguments map[string]any) (*mcp.CallToolResult, error) {
 	var status *string
-	if statusArg, ok := arguments["status"].(string); ok {
+	if statusArg, ok := parseString(arguments, "status"); ok {
 		status = &statusArg
 	}
 
@@ -140,15 +191,15 @@ func (h *Handlers) ListProjects(arguments map[string]interface{}) (*mcp.CallTool
 }
 
 // ClaimStep handles claim_step tool
-func (h *Handlers) ClaimStep(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
-	project, ok := arguments["project"].(string)
+func (h *Handlers) ClaimStep(arguments map[string]any) (*mcp.CallToolResult, error) {
+	project, ok := parseString(arguments, "project")
 	if !ok {
-		return mcp.NewToolResultError("project must be a string"), nil
+		return mcp.NewToolResultError("project is required"), nil
 	}
 
-	agentID, ok := arguments["agent_id"].(string)
+	agentID, ok := parseString(arguments, "agent_id")
 	if !ok {
-		return mcp.NewToolResultError("agent_id must be a string"), nil
+		return mcp.NewToolResultError("agent_id is required"), nil
 	}
 
 	step, err := h.db.ClaimStep(project, agentID)
@@ -169,18 +220,18 @@ func (h *Handlers) ClaimStep(arguments map[string]interface{}) (*mcp.CallToolRes
 }
 
 // StartStep handles start_step tool
-func (h *Handlers) StartStep(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
-	stepID, ok := arguments["step_id"].(float64)
+func (h *Handlers) StartStep(arguments map[string]any) (*mcp.CallToolResult, error) {
+	stepID, ok := parseStepID(arguments)
 	if !ok {
-		return mcp.NewToolResultError("step_id must be a number"), nil
+		return mcp.NewToolResultError("step_id is required"), nil
 	}
 
 	var worktree *string
-	if worktreeArg, ok := arguments["worktree"].(string); ok {
+	if worktreeArg, ok := parseString(arguments, "worktree"); ok {
 		worktree = &worktreeArg
 	}
 
-	if err := h.db.StartStep(int64(stepID), worktree); err != nil {
+	if err := h.db.StartStep(db.StepID(stepID), worktree); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("start step: %v", err)), nil
 	}
 
@@ -188,18 +239,18 @@ func (h *Handlers) StartStep(arguments map[string]interface{}) (*mcp.CallToolRes
 }
 
 // Heartbeat handles heartbeat tool
-func (h *Handlers) Heartbeat(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
-	stepID, ok := arguments["step_id"].(float64)
+func (h *Handlers) Heartbeat(arguments map[string]any) (*mcp.CallToolResult, error) {
+	stepID, ok := parseStepID(arguments)
 	if !ok {
-		return mcp.NewToolResultError("step_id must be a number"), nil
+		return mcp.NewToolResultError("step_id is required"), nil
 	}
 
-	agentID, ok := arguments["agent_id"].(string)
+	agentID, ok := parseString(arguments, "agent_id")
 	if !ok {
-		return mcp.NewToolResultError("agent_id must be a string"), nil
+		return mcp.NewToolResultError("agent_id is required"), nil
 	}
 
-	if err := h.db.Heartbeat(int64(stepID), agentID); err != nil {
+	if err := h.db.Heartbeat(db.StepID(stepID), agentID); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("heartbeat: %v", err)), nil
 	}
 
@@ -207,22 +258,22 @@ func (h *Handlers) Heartbeat(arguments map[string]interface{}) (*mcp.CallToolRes
 }
 
 // CompleteStep handles complete_step tool
-func (h *Handlers) CompleteStep(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
-	stepID, ok := arguments["step_id"].(float64)
+func (h *Handlers) CompleteStep(arguments map[string]any) (*mcp.CallToolResult, error) {
+	stepID, ok := parseStepID(arguments)
 	if !ok {
-		return mcp.NewToolResultError("step_id must be a number"), nil
+		return mcp.NewToolResultError("step_id is required"), nil
 	}
 
-	commitHash, ok := arguments["commit_hash"].(string)
+	commitHash, ok := parseString(arguments, "commit_hash")
 	if !ok {
-		return mcp.NewToolResultError("commit_hash must be a string"), nil
+		return mcp.NewToolResultError("commit_hash is required"), nil
 	}
 
-	// Handle files_modified - can be either []interface{} or string (JSON)
+	// Handle files_modified - can be either []any or string (JSON)
 	var filesModified []string
 	if filesArg, ok := arguments["files_modified"]; ok && filesArg != nil {
 		switch v := filesArg.(type) {
-		case []interface{}:
+		case []any:
 			for _, fileRaw := range v {
 				if file, ok := fileRaw.(string); ok {
 					filesModified = append(filesModified, file)
@@ -237,11 +288,11 @@ func (h *Handlers) CompleteStep(arguments map[string]interface{}) (*mcp.CallTool
 	}
 
 	var notes *string
-	if notesArg, ok := arguments["notes"].(string); ok {
+	if notesArg, ok := parseString(arguments, "notes"); ok {
 		notes = &notesArg
 	}
 
-	if err := h.db.CompleteStep(int64(stepID), commitHash, filesModified, notes); err != nil {
+	if err := h.db.CompleteStep(db.StepID(stepID), commitHash, filesModified, notes); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("complete step: %v", err)), nil
 	}
 
@@ -249,18 +300,18 @@ func (h *Handlers) CompleteStep(arguments map[string]interface{}) (*mcp.CallTool
 }
 
 // FailStep handles fail_step tool
-func (h *Handlers) FailStep(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
-	stepID, ok := arguments["step_id"].(float64)
+func (h *Handlers) FailStep(arguments map[string]any) (*mcp.CallToolResult, error) {
+	stepID, ok := parseStepID(arguments)
 	if !ok {
-		return mcp.NewToolResultError("step_id must be a number"), nil
+		return mcp.NewToolResultError("step_id is required"), nil
 	}
 
-	reason, ok := arguments["reason"].(string)
+	reason, ok := parseString(arguments, "reason")
 	if !ok {
-		return mcp.NewToolResultError("reason must be a string"), nil
+		return mcp.NewToolResultError("reason is required"), nil
 	}
 
-	if err := h.db.FailStep(int64(stepID), reason); err != nil {
+	if err := h.db.FailStep(db.StepID(stepID), reason); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("fail step: %v", err)), nil
 	}
 
@@ -268,13 +319,13 @@ func (h *Handlers) FailStep(arguments map[string]interface{}) (*mcp.CallToolResu
 }
 
 // GetStep handles get_step tool
-func (h *Handlers) GetStep(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
-	stepID, ok := arguments["step_id"].(float64)
+func (h *Handlers) GetStep(arguments map[string]any) (*mcp.CallToolResult, error) {
+	stepID, ok := parseStepID(arguments)
 	if !ok {
-		return mcp.NewToolResultError("step_id must be a number"), nil
+		return mcp.NewToolResultError("step_id is required"), nil
 	}
 
-	step, err := h.db.GetStep(int64(stepID))
+	step, err := h.db.GetStep(db.StepID(stepID))
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("get step: %v", err)), nil
 	}
@@ -288,14 +339,14 @@ func (h *Handlers) GetStep(arguments map[string]interface{}) (*mcp.CallToolResul
 }
 
 // GetAvailableSteps handles get_available_steps tool
-func (h *Handlers) GetAvailableSteps(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+func (h *Handlers) GetAvailableSteps(arguments map[string]any) (*mcp.CallToolResult, error) {
 	var projectName *string
-	if projectArg, ok := arguments["project"].(string); ok {
+	if projectArg, ok := parseString(arguments, "project"); ok {
 		projectName = &projectArg
 	}
 
 	var scope *string
-	if scopeArg, ok := arguments["scope"].(string); ok {
+	if scopeArg, ok := parseString(arguments, "scope"); ok {
 		scope = &scopeArg
 	}
 
@@ -313,10 +364,10 @@ func (h *Handlers) GetAvailableSteps(arguments map[string]interface{}) (*mcp.Cal
 }
 
 // DetectStaleWork handles detect_stale_work tool
-func (h *Handlers) DetectStaleWork(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+func (h *Handlers) DetectStaleWork(arguments map[string]any) (*mcp.CallToolResult, error) {
 	timeoutMinutes := 15
-	if timeoutArg, ok := arguments["timeout_minutes"].(float64); ok {
-		timeoutMinutes = int(timeoutArg)
+	if v, ok := parseInt(arguments, "timeout_minutes"); ok {
+		timeoutMinutes = v
 	}
 
 	steps, err := h.db.DetectStaleWork(timeoutMinutes)
@@ -333,13 +384,13 @@ func (h *Handlers) DetectStaleWork(arguments map[string]interface{}) (*mcp.CallT
 }
 
 // RecoverStep handles recover_step tool
-func (h *Handlers) RecoverStep(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
-	stepID, ok := arguments["step_id"].(float64)
+func (h *Handlers) RecoverStep(arguments map[string]any) (*mcp.CallToolResult, error) {
+	stepID, ok := parseStepID(arguments)
 	if !ok {
-		return mcp.NewToolResultError("step_id must be a number"), nil
+		return mcp.NewToolResultError("step_id is required"), nil
 	}
 
-	if err := h.db.RecoverStep(int64(stepID)); err != nil {
+	if err := h.db.RecoverStep(db.StepID(stepID)); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("recover step: %v", err)), nil
 	}
 
@@ -347,13 +398,13 @@ func (h *Handlers) RecoverStep(arguments map[string]interface{}) (*mcp.CallToolR
 }
 
 // RecoverFailedStep handles recover_failed_step tool
-func (h *Handlers) RecoverFailedStep(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
-	stepID, ok := arguments["step_id"].(float64)
+func (h *Handlers) RecoverFailedStep(arguments map[string]any) (*mcp.CallToolResult, error) {
+	stepID, ok := parseStepID(arguments)
 	if !ok {
-		return mcp.NewToolResultError("step_id must be a number"), nil
+		return mcp.NewToolResultError("step_id is required"), nil
 	}
 
-	if err := h.db.RecoverFailedStep(int64(stepID)); err != nil {
+	if err := h.db.RecoverFailedStep(db.StepID(stepID)); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("recover failed step: %v", err)), nil
 	}
 
@@ -361,14 +412,14 @@ func (h *Handlers) RecoverFailedStep(arguments map[string]interface{}) (*mcp.Cal
 }
 
 // GetMetrics handles get_metrics tool
-func (h *Handlers) GetMetrics(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+func (h *Handlers) GetMetrics(arguments map[string]any) (*mcp.CallToolResult, error) {
 	var projectName *string
-	if projectArg, ok := arguments["project"].(string); ok {
+	if projectArg, ok := parseString(arguments, "project"); ok {
 		projectName = &projectArg
 	}
 
 	var agentID *string
-	if agentArg, ok := arguments["agent_id"].(string); ok {
+	if agentArg, ok := parseString(arguments, "agent_id"); ok {
 		agentID = &agentArg
 	}
 
@@ -386,20 +437,20 @@ func (h *Handlers) GetMetrics(arguments map[string]interface{}) (*mcp.CallToolRe
 }
 
 // GetAgentEvents handles get_agent_events tool
-func (h *Handlers) GetAgentEvents(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+func (h *Handlers) GetAgentEvents(arguments map[string]any) (*mcp.CallToolResult, error) {
 	var agentID *string
-	if agentArg, ok := arguments["agent_id"].(string); ok {
+	if agentArg, ok := parseString(arguments, "agent_id"); ok {
 		agentID = &agentArg
 	}
 
 	var projectName *string
-	if projectArg, ok := arguments["project"].(string); ok {
+	if projectArg, ok := parseString(arguments, "project"); ok {
 		projectName = &projectArg
 	}
 
 	limit := 100
-	if limitArg, ok := arguments["limit"].(float64); ok {
-		limit = int(limitArg)
+	if v, ok := parseInt(arguments, "limit"); ok {
+		limit = v
 	}
 
 	events, err := h.db.GetAgentEvents(agentID, projectName, limit)

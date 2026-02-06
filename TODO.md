@@ -208,8 +208,8 @@ All handlers need:
 ### Developer Experience
 
 - [ ] **CLI tool** - Command-line interface
-  - `concurrent-agent-mcp create-project ...`
-  - `concurrent-agent-mcp list-steps ...`
+  - `hq create-project ...`
+  - `hq list-steps ...`
   - Alternative to MCP tools for debugging
 
 - [ ] **Web UI** - Dashboard

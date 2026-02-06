@@ -1,4 +1,4 @@
-module github.com/yourusername/concurrent-agent-mcp
+module github.com/hegner123/hq
 
 go 1.23.2
 

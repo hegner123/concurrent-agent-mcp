@@ -1,0 +1,87 @@
+version: "2"
+sql:
+  - engine: "sqlite"
+    queries: "internal/db/query.sql"
+    schema: "internal/db/schema.sql"
+    gen:
+      go:
+        package: "db"
+        out: "internal/db"
+        emit_json_tags: true
+        emit_empty_slices: true
+        overrides:
+          # --- ID Types ---
+          - column: "projects.id"
+            go_type:
+              type: "ProjectID"
+          - column: "steps.id"
+            go_type:
+              type: "StepID"
+          - column: "steps.project_id"
+            go_type:
+              type: "ProjectID"
+          - column: "agent_events.id"
+            go_type:
+              type: "AgentEventID"
+          - column: "agent_events.project_id"
+            go_type:
+              type: "NullProjectID"
+          - column: "agent_events.step_id"
+            go_type:
+              type: "NullStepID"
+          - column: "dependencies.step_id"
+            go_type:
+              type: "StepID"
+          - column: "dependencies.depends_on_step_id"
+            go_type:
+              type: "StepID"
+          - column: "failed_steps_history.id"
+            go_type:
+              type: "int64"
+          - column: "failed_steps_history.original_step_id"
+            go_type:
+              type: "StepID"
+          - column: "failed_steps_history.project_id"
+            go_type:
+              type: "ProjectID"
+          # --- Status Types ---
+          - column: "projects.status"
+            go_type:
+              type: "ProjectStatus"
+          - column: "steps.status"
+            go_type:
+              type: "StepStatus"
+          - column: "agent_events.event_type"
+            go_type:
+              type: "EventType"
+          # --- Time Types ---
+          - column: "projects.created_at"
+            go_type:
+              type: "SQLiteTime"
+          - column: "steps.claimed_at"
+            go_type:
+              type: "NullSQLiteTime"
+          - column: "steps.started_at"
+            go_type:
+              type: "NullSQLiteTime"
+          - column: "steps.completed_at"
+            go_type:
+              type: "NullSQLiteTime"
+          - column: "steps.last_heartbeat"
+            go_type:
+              type: "NullSQLiteTime"
+          - column: "agent_events.timestamp"
+            go_type:
+              type: "SQLiteTime"
+          - column: "failed_steps_history.claimed_at"
+            go_type:
+              type: "NullSQLiteTime"
+          - column: "failed_steps_history.started_at"
+            go_type:
+              type: "NullSQLiteTime"
+          - column: "failed_steps_history.failed_at"
+            go_type:
+              type: "NullSQLiteTime"
+          - column: "failed_steps_history.archived_at"
+            go_type:
+              type: "SQLiteTime"

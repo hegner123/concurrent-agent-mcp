@@ -9,18 +9,20 @@ This is a Go-based MCP (Model Context Protocol) server for coordinating multiple
 **Key Architecture:**
 - Single Go binary serving MCP protocol over stdio
 - SQLite database at `~/.claude/agent-coordination.db` (WAL mode for concurrency)
-- Database layer in `internal/db/db.go` with transaction-safe operations
+- sqlc-generated type-safe queries (`internal/db/query.sql.go`)
+- Custom types for IDs and statuses (`internal/db/types.go`)
+- Database wrapper with business logic (`internal/db/store.go`)
 - MCP tool handlers in `internal/mcp/handlers.go`
-- Schema migrations embedded in code (internal/db/db.go:migrate)
+- Schema migrations embedded in code (`internal/db/store.go:migrate`)
 
 ## Build and Development Commands
 
 ```bash
 # Build binary
-make build              # Builds to bin/concurrent-agent-mcp
+make build              # Builds to bin/hq
 
 # Install system-wide
-make install            # Installs to /usr/local/bin/concurrent-agent-mcp
+make install            # Installs to /usr/local/bin/hq
 
 # Run tests
 make test
@@ -54,18 +56,38 @@ make db-backup          # Creates timestamped backup
 
 ### Database Layer (internal/db/)
 
-**Key types:**
+**File structure:**
+- `types.go` - Custom types: IDs, statuses, time handling
+- `schema.sql` - Database schema for sqlc
+- `query.sql` - SQL queries with sqlc annotations
+- `db.go` - sqlc-generated DBTX interface and Queries struct
+- `models.go` - sqlc-generated model structs
+- `query.sql.go` - sqlc-generated query functions
+- `store.go` - DB wrapper with business logic and migrations
+
+**Custom ID types (type-safe, prevents mixing):**
+- `ProjectID` - Typed int64 for project IDs
+- `StepID` - Typed int64 for step IDs
+- `AgentEventID` - Typed int64 for event IDs
+- `NullProjectID`, `NullStepID` - Nullable versions with Scan/Value
+
+**Status enum types (compile-time safety):**
+- `ProjectStatus` - active, completed, aborted
+- `StepStatus` - not_started, claimed, in_progress, completed, failed, merged
+- `EventType` - claimed, started, heartbeat, completed, failed, recovered
+
+**Key model types:**
 - `Project` - Top-level project with base commit hash
-- `Step` - Individual work item with status, agent assignment, heartbeat, optional workspace path
+- `Step` - Individual work item with status, agent assignment, heartbeat
 - `StepInput` - Input for creating steps with dependencies
 
-**Transaction pattern:** All state-changing operations use `tx.Begin()`, defer `tx.Rollback()`, explicit `tx.Commit()`. This ensures atomicity even with concurrent access.
+**Transaction pattern:** All state-changing operations use `tx.Begin()`, defer `tx.Rollback()`, explicit `tx.Commit()`. sqlc's `WithTx()` method provides transaction-scoped queries.
 
 **Dependency resolution:** Steps only become available when all dependencies have status `completed` or `merged`. The availability query uses `NOT EXISTS` to check unsatisfied dependencies.
 
 ### MCP Handler Layer (internal/mcp/)
 
-Handlers receive `map[string]interface{}` arguments, perform type validation, call database methods, and return `*mcp.CallToolResult` (or error).
+Handlers receive `map[string]any` arguments, perform type validation, call database methods, and return `*mcp.CallToolResult` (or error).
 
 **Handler pattern:**
 1. Type-check and extract arguments from map
@@ -87,7 +109,7 @@ not_started → claim_step() → claimed → start_step() → in_progress
 
 **Testing the server locally:**
 1. Run `make build` to create binary
-2. Execute `./bin/concurrent-agent-mcp` directly (connects stdin/stdout)
+2. Execute `./bin/hq` directly (connects stdin/stdout)
 3. The server will create the database and run migrations
 4. Use Claude Code or any MCP client to test tools
 
@@ -112,24 +134,38 @@ SELECT * FROM agent_events ORDER BY timestamp DESC LIMIT 20;
 ## Go-Specific Conventions
 
 - Use `any` not `interface{}`
-- All database fields that can be NULL are Go pointer types (`*string`, `*time.Time`)
-- JSON arguments from MCP come as `float64` for numbers (cast to `int` or `int64`)
+- Use typed IDs (`StepID`, `ProjectID`) not raw `int64` - cast from MCP: `db.StepID(stepID)`
+- Use enum constants (`StepStatusClaimed`) not strings (`"claimed"`)
+- Nullable fields use `sql.NullString`, `NullProjectID`, `NullStepID`, `NullSQLiteTime`
+- JSON arguments from MCP come as `float64` for numbers (cast to typed ID)
 - Database uses `?` placeholders (not named parameters)
 - SQL timestamps use SQLite's `datetime('now')` function
+- Custom `SQLiteTime` type handles SQLite TEXT datetime format
 
 ## Adding New Tools
 
 1. Add tool registration in `main.go:registerTools()` with schema
 2. Add handler method to `internal/mcp/handlers.go` following the handler pattern
-3. Add database method to `internal/db/db.go` if needed
-4. Update README.md with tool documentation
+3. Add query to `internal/db/query.sql` with sqlc annotation
+4. Run `sqlc generate` to regenerate query functions
+5. Add wrapper method to `internal/db/store.go` if needed
+6. Update README.md with tool documentation
 
 ## Adding Database Fields
 
-1. Update the schema in `internal/db/db.go:migrate()` function
-2. Update corresponding struct in `internal/db/db.go`
-3. Update queries to include new field
-4. Consider migration strategy for existing databases (schema version tracking exists)
+1. Update the schema in `internal/db/schema.sql`
+2. Update the migration in `internal/db/store.go:migrate()`
+3. Update queries in `internal/db/query.sql` to include new field
+4. Run `sqlc generate` to regenerate models and queries
+5. Add type override to `sqlc.yaml` if using custom type
+6. Consider migration strategy for existing databases (schema version tracking exists)
+
+## Adding New Enum Values
+
+1. Add constant to enum type in `internal/db/types.go`
+2. Update `Valid()` method for the enum type
+3. Update schema CHECK constraint in `schema.sql` and `store.go:migrate()`
+4. Run `sqlc generate`
 
 ## Performance Characteristics
 
@@ -144,8 +180,8 @@ SELECT * FROM agent_events ORDER BY timestamp DESC LIMIT 20;
 
 **User scope (recommended for global access):**
 ```bash
-claude mcp add --scope user --transport stdio concurrent-agent-mcp -- \
-  /usr/local/bin/concurrent-agent-mcp
+claude mcp add --scope user --transport stdio hq -- \
+  /usr/local/bin/hq
 ```
 
 **Environment variable:** Set `AGENT_DB_PATH` to override default database location.
