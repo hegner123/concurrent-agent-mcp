@@ -1,29 +1,40 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"github.com/yourusername/concurrent-agent-mcp/internal/db"
-	mcphandlers "github.com/yourusername/concurrent-agent-mcp/internal/mcp"
+	"github.com/hegner123/hq/internal/db"
+	mcphandlers "github.com/hegner123/hq/internal/mcp"
 )
 
 const (
-	serverName    = "concurrent-agent-mcp"
+	serverName    = "hq"
 	serverVersion = "0.1.0"
 )
 
 func main() {
 	if err := run(); err != nil {
+		// Suppress expected shutdown errors
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
+			return
+		}
 		log.Fatal(err)
 	}
 }
 
 func run() error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Get database path from env or use default
 	dbPath := os.Getenv("AGENT_DB_PATH")
 	if dbPath == "" {
@@ -40,7 +51,7 @@ func run() error {
 	}
 
 	// Initialize database
-	database, err := db.New(dbPath)
+	database, err := db.NewDB(dbPath)
 	if err != nil {
 		return fmt.Errorf("initialize database: %w", err)
 	}
@@ -57,6 +68,20 @@ func run() error {
 
 	// Register tools
 	registerTools(s, handlers)
+
+	// Background stale-work recovery
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				database.AutoRecover(15)
+			}
+		}
+	}()
 
 	// Run server via stdio
 	if err := server.ServeStdio(s); err != nil {
